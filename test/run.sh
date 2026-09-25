@@ -12,6 +12,8 @@
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
+# An agent running the suite would otherwise give every default-named box its session's suffix.
+unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
@@ -229,6 +231,49 @@ t_unit_cli() {
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
   check_fails "down --all with a name refused" ob down "$P-x" --all
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
+}
+
+# finding 88: an agent session's default box is its own.
+t_unit_agent_session() {
+  local repo; repo=$(tmp_repo as)
+  dn() { (cd "$repo" && env -u OMABOX -u OMABOX_SESSION -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID "$@" bash -c 'source "$1"; default_name' _ "$TMP/lib/bin/omabox"); }
+  check_eq "no agent: the repo's name" "$P-as" "$(dn)"
+  check_eq "Claude Code: the session id's tail" "$P-as-5cc72cdc" "$(dn CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "Codex: the random tail of its UUIDv7, not the timestamp" "$P-as-c8d64254" "$(dn CODEX_THREAD_ID=01a0314c-9a07-72f1-8183-d09fc8d64254)"
+  check_eq "Codex sessions started together get different boxes" "$P-as-6ad3e01f" "$(dn CODEX_THREAD_ID=01a0314c-9a07-72f1-8183-d0a16ad3e01f)"
+  check_eq "OMABOX_SESSION wins" "$P-as-abcdef12" "$(dn OMABOX_SESSION=abcdef12 CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "OMABOX_SESSION= opts out" "$P-as" "$(dn OMABOX_SESSION= CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "OMABOX still names the box" shared "$(dn OMABOX=shared CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "a short id is no session" "$P-as" "$(dn CLAUDE_CODE_SESSION_ID=abc)"
+  local long; long=$TMP/$P-a-repo-with-a-name-far-longer-than-forty; mkdir -p "$long" && git -C "$long" init -q
+  local got; got=$(cd "$long" && CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc bash -c 'source "$1"; select_box ""; echo "$NAME"' _ "$TMP/lib/bin/omabox")
+  check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "$got"
+  check_match "guard exec: a session of its own" '^g[0-9a-f]{12}$' "$(env -u OMABOX_SESSION "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+  check_eq "guard exec: an OMABOX_SESSION set is kept" mine12345 "$(OMABOX_SESSION=mine12345 "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+}
+
+# finding 88: two agent sessions in one repo get a box each, and one's `down` leaves the other's up. A
+# session's default box idles out after 30 min; --idle, OMABOX_IDLE and a name given with -b keep theirs.
+t_agent_session() {
+  local repo; repo=$(tmp_repo ag)
+  local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
+  as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
+  idle_of() { jq -r .idle "$XDG_RUNTIME_DIR/omabox/$1/box.json"; }
+  # shellcheck disable=SC2329 # called through check
+  up_as() { "$CLI" ls --json | jq -e --arg n "$1" '.[] | select(.name == $n and .state == "up")' >/dev/null; }
+  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-named
+  check "session 1 starts its box" as $s1 up --no-shell
+  check "session 2 starts its own" as $s2 up --no-shell --idle 45m
+  check "session 1 has its box" up_as "$b1"
+  check "session 2 has its own" up_as "$b2"
+  check_eq "a session's box idles out after 30 min" 1800 "$(idle_of "$b1")"
+  check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
+  check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
+  as $s2 down >/dev/null 2>&1
+  check "session 2's down leaves session 1's box up" up_as "$b1"
+  check "a box named with -b" as $s1 up "$b3" --no-shell
+  check_eq "...keeps the 2 h limit" 7200 "$(idle_of "$b3")"
+  ob down "$b1" "$b3" >/dev/null 2>&1
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
@@ -967,8 +1012,8 @@ t_guard() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_dbus_user_app t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
+BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

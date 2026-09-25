@@ -1065,6 +1065,24 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     --user list --activatable` until its first activation or a `ReloadConfig`. `seed_home` now creates
     the dir. Checked in plain and `--systemd` boxes before and after; `t_dbus_user_app` and `t_systemd`
     install an app after `up` and launch it with `gtk-launch` (all five checks fail without the fix).
+88. **A box per agent session** (2026-09-25). The default name was the repo's, so two agents in one
+    checkout (two Claude Code windows, a Claude Code and a Codex) shared a box: one's `up` got the
+    other's box with its options ignored, its `run` saw the repo read-only, and its `down` ended the
+    other's work. Both agents already tell their shell commands who they are: Claude Code exports
+    `CLAUDE_CODE_SESSION_ID` (a UUIDv4), Codex `CODEX_THREAD_ID` (a UUIDv7, checked in its rollout
+    logs). The default name is now `<repo>-<last 8 of the id>`; the tail, because a UUIDv7 starts with
+    a timestamp two sessions opened in the same minute share. `guard exec` sets `OMABOX_SESSION` for
+    any other agent; set to empty, it turns the suffix off. `-b` and `OMABOX` are unchanged.
+    Where one box used to be reused, each session now starts its own (~500 MB), so a session's
+    default box goes down after 30 min idle instead of 2 h (`--idle` and `OMABOX_IDLE` still set it);
+    agents are told to `omabox down` when done, and this catches the ones that forget. Taking the box
+    down when its agent exits is left for a follow-up. What follows from the id: Claude Code's
+    subagents run in its process with the same `CLAUDE_CODE_SESSION_ID`, so parallel subagents still
+    share one box (each needs `-b NAME` for its own); `/clear` gives the session a new id, and
+    `/resume` the resumed one's (`/compact` keeps it), so after `/clear` the agent starts a new box
+    and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
+    (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
+    user passes `-b` to `peek` or `shot` an agent's box.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

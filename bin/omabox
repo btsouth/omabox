@@ -50,7 +50,9 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
   omabox --version
 
-NAME defaults to \$OMABOX, else the current git repo's name, else "default".
+NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
+(Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
+session, which goes down after 30m idle. OMABOX_SESSION= (empty) turns that off.
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
@@ -64,8 +66,9 @@ Interactive boxes and peek windows open on workspace 9, without focus: \`omabox 
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
 box's window ends the box; \`omabox config confirm-close on\` asks first (a second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box.
-A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
-peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+A headless box goes down after \$OMABOX_IDLE (default 2h; 30m for a session's) with no omabox
+command against it, no peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per
+box. Interactive: never.
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
@@ -139,12 +142,34 @@ conf_set() {
 # --- box selection -------------------------------------------------------------------------------
 
 default_name() {
-  local top
+  local top base sid
   # Inside a box OMABOX=1 marks the box (with OMABOX_NAME), not a box named "1".
-  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"
-  elif top=$(git rev-parse --show-toplevel 2>/dev/null); then basename "$top"
-  else echo default
-  fi
+  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"; return; fi
+  if top=$(git rev-parse --show-toplevel 2>/dev/null); then base=$(basename "$top"); else base=default; fi
+  # An agent session gets a box of its own (finding 88): two agents in one repo would otherwise share
+  # one, and one's `down` would end the other's work. The suffix survives select_box's 40-char cut.
+  if sid=$(agent_session); then echo "$(printf '%s' "$base" | cut -c1-31)-$sid"; else echo "$base"; fi
+}
+
+# The agent session this command runs in, as 8 characters, or a failure outside one. Claude Code and
+# Codex export their session's id to every shell command; `omabox guard exec` sets OMABOX_SESSION for
+# other agents, and OMABOX_SESSION= (empty) opts out. The id's tail: Codex's is a UUIDv7, whose head is
+# a timestamp that two sessions started in the same minute share.
+AGENT_VARS=(OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID)
+agent_var() {
+  local v
+  for v in "${AGENT_VARS[@]}"; do
+    [ -n "${!v+x}" ] || continue
+    [ -n "${!v}" ] || return 1
+    echo "$v"; return 0
+  done
+  return 1
+}
+agent_session() {
+  local v id; v=$(agent_var) || return 1
+  id=$(printf '%s' "${!v}" | tr -cd 'A-Za-z0-9')
+  [ ${#id} -ge 8 ] || return 1
+  id=${id: -8}; echo "${id,,}"
 }
 
 # Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame.
@@ -592,7 +617,7 @@ refuse_dest() {
 cmd_up() {
   STOCK_BAR=0
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-2h}
+  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -632,6 +657,16 @@ cmd_up() {
     name=box-$n
   fi
   select_box "$name"
+  # An agent session's default box (finding 88) idles out after 30 min, not 2 h: each session now
+  # starts one where they used to share. Not an interactive box (the user's window), a throwaway, or a
+  # name given with -b/OMABOX that happens to match; --idle and OMABOX_IDLE still set it.
+  if [ -z "$idle" ]; then
+    idle=2h
+    if [ $interactive = 0 ] && [ -z "$owner" ] && [ -z "${OMABOX:-}" ] && agent_session >/dev/null &&
+      [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; then
+      idle=30m
+    fi
+  fi
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
   [ $interactive = 0 ] || idle_s=0
@@ -1548,10 +1583,12 @@ cmd_guard() {
   case $act in
     exec)
       # Any other agent, whole: everything it runs inherits the guard (its own process loses the
-      # display too: clipboard, opening a browser).
+      # display too: clipboard, opening a browser). And a session of its own (finding 88), unless
+      # OMABOX_SESSION says otherwise.
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
       export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      if [ -z "${OMABOX_SESSION+x}" ]; then OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION; fi
       exec "$@" ;;
     ""|on|off) ;;
     *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
