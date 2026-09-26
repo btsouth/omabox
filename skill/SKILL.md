@@ -117,7 +117,8 @@ When the user asked for their **real** desktop in this task ("switch my theme", 
 config after an edit, see the change on my screen), run that one command with `omabox host -- CMD`
 (e.g. `omabox host -- hyprctl reload`, `omabox host -- omarchy-theme-set NAME`). Only then: it is
 the one way past the guard, and it is on the record. Testing, screenshots and anything the user did
-not ask to see on their desktop stay in a box.
+not ask to see on their desktop stay in a box. Never use it to switch the user's workspace or focus
+so you can see a box: `shot` works on a hidden interactive box.
 
 ## Omarchy shell plugins
 
@@ -177,9 +178,10 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   one they set with `omabox config workspace`) without
   taking focus. Only when the user asks to watch; it does not affect the box.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives (SUPER+ALT+ESCAPE
-  sends SUPER keys to it). Only when the user asks for it. `shot` does not work while that window is
-  hidden; agents use headless boxes. `omabox config` holds the user's settings: change them only when
-  the user asks.
+  sends SUPER keys to it). Only when the user asks for it. `shot`, `click` and `keys` work on it while
+  its window is hidden; never bring that window forward yourself. When the user has to act in it (a
+  login), tell them which workspace it is on and let them go there. `omabox config` holds the user's
+  settings: change them only when the user asks.
 
 ## When a box cannot test it: real hardware and the real session
 

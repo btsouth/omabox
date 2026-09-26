@@ -1083,6 +1083,23 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
     (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
     user passes `-b` to `peek` or `shot` an agent's box.
+90. **A hidden interactive box is drawn, so no agent switches the user's workspace for a shot**
+    (2026-09-26, seen by a user: a Codex agent testing an app in an interactive box on
+    workspace 9 kept flipping their second monitor to 9 and taking focus). Finding 24's `shot`
+    failure said the host only renders the window "while its window is visible (workspace 9)", and
+    the agent took that as the fix: `omabox host -- hyprctl eval 'hl.dispatch(hl.dsp.focus({
+    workspace = "9" }))'` before every click and shot, then focus back to workspace 1, dozens of
+    times. The exec rule now adds `render_unfocused = true`: the host sends the hidden window frame
+    callbacks (at `misc.render_unfocused_fps`, 15 by default), the box's Hyprland keeps drawing, and
+    `shot`, `click` and `keys` all work with the window out of sight. The rule only counts at map
+    time: `set_prop` on an existing window sets the prop (getprop says true) but it stays undrawn,
+    even after showing and hiding it, so boxes started before this need a restart. `up` records
+    `drawn_hidden` in box.json and `shot`'s failure message tells those apart; neither message
+    suggests showing the window, both say not to. The skill says the same under `omabox host`.
+    Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
+    a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
+    with the stand-in's workspace and focus unchanged throughout. `t_guard` checks the shot and the
+    workspace. Not yet checked on the real desktop.
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
     `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`

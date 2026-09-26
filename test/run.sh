@@ -979,6 +979,9 @@ t_guard() {
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
+  # render_unfocused (finding 90): a shot while its window is hidden, and the host's workspace stays
+  check "...shot while its window is hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden.png
+  check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
