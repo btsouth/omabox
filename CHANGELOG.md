@@ -3,6 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- Each agent session gets its own box. In Claude Code, Codex, or an agent started with
+  `omabox guard exec`, the default box name ends with the session's id (`myrepo-5cc72cdc`), so two
+  agents in one repo no longer share a box or take each other's down. A session's box goes down after
+  30 minutes idle instead of 2 hours. `-b NAME` and `OMABOX=NAME` work as before;
+  `OMABOX_SESSION=` (empty) turns this off.
+
 ## 0.1.2 — 2026-09-26
 
 Apps installed inside a box start from the launcher, and pull requests get a check.
