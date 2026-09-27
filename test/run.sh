@@ -13,7 +13,7 @@ set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
 # An agent running the suite would otherwise give every default-named box its session's suffix.
-unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID
+unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AGENT_PID
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
@@ -250,30 +250,73 @@ t_unit_agent_session() {
   check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "$got"
   check_match "guard exec: a session of its own" '^g[0-9a-f]{12}$' "$(env -u OMABOX_SESSION "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
   check_eq "guard exec: an OMABOX_SESSION set is kept" mine12345 "$(OMABOX_SESSION=mine12345 "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+  # finding 93: the agent is Claude Code's CLAUDE_PID, the process `guard exec` became, or (Codex) the
+  # nearest ancestor without its session variable; always one this command descends from.
+  # (`; true`: bash would otherwise exec its last command, and the "agent" would be gone)
+  local out lib=$TMP/lib/bin/omabox
+  out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-session" "$lib")
+  check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  sleep 30 & local other=$!
+  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
+  kill "$other" 2>/dev/null
+  out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
+  check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
+  check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
+    env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
 }
 
-# finding 88: two agent sessions in one repo get a box each, and one's `down` leaves the other's up. A
-# session's default box idles out after 30 min; --idle, OMABOX_IDLE and a name given with -b keep theirs.
+# findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
+# other's up. A session's box goes when its agent exits, but not while it is in use, and a dead one
+# keeps its logs. The "agent" here is a shell that exports its own pid as CLAUDE_PID, as Claude Code does.
 t_agent_session() {
   local repo; repo=$(tmp_repo ag)
   local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
+  local s3=11111111-2222-4333-8444-5555aaaa0003 s4=11111111-2222-4333-8444-5555aaaa0004
   as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
+  # Run in the background: exec makes that process the agent, so $! is its pid.
+  agent() {
+    cd "$repo" || exit 1
+    exec env -u OMABOX -u OMABOX_IDLE bash -c "export CLAUDE_CODE_SESSION_ID=$1 CLAUDE_PID=\$\$
+      '$CLI' up --no-shell ${2:-} >/dev/null 2>&1; touch '$TMP/ag-$1'; exec sleep 300" >/dev/null 2>&1
+  }
   idle_of() { jq -r .idle "$XDG_RUNTIME_DIR/omabox/$1/box.json"; }
-  # shellcheck disable=SC2329 # called through check
-  up_as() { "$CLI" ls --json | jq -e --arg n "$1" '.[] | select(.name == $n and .state == "up")' >/dev/null; }
-  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-named
-  check "session 1 starts its box" as $s1 up --no-shell
-  check "session 2 starts its own" as $s2 up --no-shell --idle 45m
-  check "session 1 has its box" up_as "$b1"
-  check "session 2 has its own" up_as "$b2"
-  check_eq "a session's box idles out after 30 min" 1800 "$(idle_of "$b1")"
+  state_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
+  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
+  agent $s1 & local a1=$!
+  agent $s2 "--idle 45m" & local a2=$!
+  check "both sessions' boxes start" until_ok 40 test -e "$TMP/ag-$s1" -a -e "$TMP/ag-$s2"
+  check_eq "session 1 has its box" up "$(state_of "$b1")"
+  check_eq "session 2 has its own" up "$(state_of "$b2")"
+  check_eq "the box knows its agent" "$a1" "$(jq -r .agent "$XDG_RUNTIME_DIR/omabox/$b1/box.json")"
+  check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
   check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
   as $s2 down >/dev/null 2>&1
-  check "session 2's down leaves session 1's box up" up_as "$b1"
-  check "a box named with -b" as $s1 up "$b3" --no-shell
-  check_eq "...keeps the 2 h limit" 7200 "$(idle_of "$b3")"
-  ob down "$b1" "$b3" >/dev/null 2>&1
+  check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
+  as $s1 up "$named" --no-shell --idle 30s >/dev/null 2>&1
+  check_eq "a box named with -b is not tied to the agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$named/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" up --no-shell --idle 30s >/dev/null 2>&1)
+  check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  ob down "$named" "$P-ag-abcd1234" "$b1" >/dev/null 2>&1; kill "$a1" "$a2" 2>/dev/null
+  # Short idle limits, so the reaper polls every few seconds.
+  agent $s3 "--idle 30s" & local a3=$!
+  agent $s4 "--idle 30s" & local a4=$!
+  until_ok 40 test -e "$TMP/ag-$s3" -a -e "$TMP/ag-$s4"
+  ob run -b "$b3" -- sleep 15 & local busy=$!
+  sleep 1; kill "$a3" 2>/dev/null
+  local pid4; pid4=$(bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$b4")
+  kill -KILL "$pid4" 2>/dev/null; kill "$a4" 2>/dev/null
+  sleep 10
+  check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
+  check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
+  wait "$busy" 2>/dev/null
+  # shellcheck disable=SC2329 # called through until_ok
+  gone() { [ "$(state_of "$1")" = gone ]; }
+  check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
+  ob down "$b3" "$b4" >/dev/null 2>&1
+  kill "$a1" "$a2" "$a3" "$a4" 2>/dev/null
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare

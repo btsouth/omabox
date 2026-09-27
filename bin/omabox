@@ -52,7 +52,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
-session, which goes down after 30m idle. OMABOX_SESSION= (empty) turns that off.
+session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off.
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
@@ -66,9 +66,8 @@ Interactive boxes and peek windows open on workspace 9, without focus: \`omabox 
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
 box's window ends the box; \`omabox config confirm-close on\` asks first (a second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box.
-A headless box goes down after \$OMABOX_IDLE (default 2h; 30m for a session's) with no omabox
-command against it, no peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per
-box. Interactive: never.
+A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
+peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
@@ -171,6 +170,38 @@ agent_session() {
   [ ${#id} -ge 8 ] || return 1
   id=${id: -8}; echo "${id,,}"
 }
+
+# The agent's own process, as "PID START" (START: its start time, so a reused pid is not taken for it),
+# or a failure (finding 93). Claude Code exports its pid as CLAUDE_PID; `guard exec` exports the pid it
+# execs the agent as, OMABOX_AGENT_PID. Codex sets its session variable for its children only, so it is
+# the nearest ancestor without it (compared by value: a `codex` started from another session's shell
+# carries the outer id). OMABOX_SESSION set by hand, for a shell or one command, names no agent: that
+# box only idles out. Neither does an agent in a pid namespace of its own (a sandbox), nor a pid this
+# command does not descend from.
+agent_proc() {
+  local v pid=""
+  v=$(agent_var) || return 1
+  case $v in
+    CLAUDE_CODE_SESSION_ID) pid=${CLAUDE_PID:-} ;;
+    OMABOX_SESSION) pid=${OMABOX_AGENT_PID:-} ;;
+    CODEX_THREAD_ID)
+      pid=$$
+      while [ "$pid" -gt 1 ] && tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qxF "$v=${!v}"; do
+        pid=$(proc_ppid "$pid") || return 1
+      done ;;
+  esac
+  [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ -r "/proc/$pid/environ" ] || return 1
+  local p=$$
+  until [ "$p" = "$pid" ]; do
+    [ "$p" -gt 1 ] || return 1
+    p=$(proc_ppid "$p") || return 1
+  done
+  echo "$pid $(proc_start "$pid")"
+}
+# Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses).
+proc_stat() { local s f; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; read -ra f <<<"${s##*) }"; echo "${f[$2]}"; }
+proc_ppid() { proc_stat "$1" 1; }
+proc_start() { proc_stat "$1" 19; }
 
 # Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame.
 select_box() {
@@ -619,7 +650,7 @@ refuse_dest() {
 cmd_up() {
   STOCK_BAR=0
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-}
+  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -659,15 +690,13 @@ cmd_up() {
     name=box-$n
   fi
   select_box "$name"
-  # An agent session's default box (finding 88) idles out after 30 min, not 2 h: each session now
-  # starts one where they used to share. Not an interactive box (the user's window), a throwaway, or a
-  # name given with -b/OMABOX that happens to match; --idle and OMABOX_IDLE still set it.
-  if [ -z "$idle" ]; then
-    idle=2h
-    if [ $interactive = 0 ] && [ -z "$owner" ] && [ -z "${OMABOX:-}" ] && agent_session >/dev/null &&
-      [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; then
-      idle=30m
-    fi
+  # The box an agent session got by default goes when the agent does (finding 93), or when idle. Not
+  # an interactive box (the user's window), a throwaway, or a name given with -b/OMABOX that happens
+  # to match.
+  local agent=""
+  if [ $interactive = 0 ] && [ -z "$owner" ] && [ -z "${OMABOX:-}" ] && agent_session >/dev/null &&
+    [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; then
+    agent=$(agent_proc) || agent=""
   fi
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
@@ -754,13 +783,14 @@ cmd_up() {
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
-    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" \
+    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
+      + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
 
@@ -872,7 +902,7 @@ cmd_up() {
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop)"
   touch "$D/used"
-  if [ "$idle_s" != 0 ] || [ -n "$owner" ] || [ $interactive = 1 ]; then
+  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
   fi
   local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
@@ -942,11 +972,14 @@ human_duration() {
 # (killed with SIGKILL, so its EXIT trap never ran), so is the box. Exits when the box goes, or when a
 # new box took the name (its creation time differs). A throwaway box found dead once its run is gone
 # is cleared too: its run's teardown gave up on it (PID 1 slow to exit under load) and nobody reads its
-# logs; other dead boxes stay for theirs.
+# logs; other dead boxes stay for theirs. An agent session's own box (finding 93) goes when the agent's
+# process does (the one `up` recorded, with its start time), unless it is in use then (a peek window,
+# an `omabox run` still running): it idles out after that. A dead one keeps its logs, as others do.
 cmd__reap() {
-  select_box "$1"; local created=$2 idle owner mode; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
+  select_box "$1"; local created=$2 idle owner mode agent; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
+  agent=$(meta agent)
   [ -n "$idle" ] || idle=0
-  [ "$idle" -gt 0 ] || [ -n "$owner" ] || [ "$mode" = interactive ] || return 0
+  [ "$idle" -gt 0 ] || [ -n "$owner$agent" ] || [ "$mode" = interactive ] || return 0
   local every=$((idle / 4)); [ $every -le 60 ] || every=60; [ $every -ge 5 ] || every=5
   # An interactive box closed by its user goes from the widget and `ls` within a poll or so.
   [ "$mode" != interactive ] || every=2
@@ -967,11 +1000,16 @@ cmd__reap() {
       say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
       DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
     fi
-    [ "$idle" -gt 0 ] || continue
+    [ "$idle" -gt 0 ] || [ -n "$agent" ] || continue
     local pid; pid=$(box_pid)
     if peek_pid >/dev/null || pgrep -f "^nsenter -t $pid " >/dev/null; then
       touch "$D/used"; continue
     fi
+    if [ -n "$agent" ] && ! agent_alive; then
+      say "$(date -Is) box '$NAME': its agent session ($agent) ended: taking it down"
+      DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
+    fi
+    [ "$idle" -gt 0 ] || continue
     [ $(($(date +%s) - $(stat -c %Y "$D/used"))) -ge "$idle" ] || continue
     local human; human=$(human_duration "$idle")
     say "$(date -Is) box '$NAME' idle for $human: taking it down"
@@ -980,6 +1018,9 @@ cmd__reap() {
     return 0
   done
 }
+
+# Whether the agent `up` recorded for this box still runs: its pid, started when it was then.
+agent_alive() { [ "$(proc_start "$(meta agent)")" = "$(meta agent_start)" ]; }
 
 # Write VALUE to a file in a box's runtime dir (<box dir>/run/FILE). The box can write that dir too, so
 # never open what is there: a link to a host file would be written through, a FIFO would block
@@ -1591,6 +1632,8 @@ cmd_guard() {
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
       export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
       if [ -z "${OMABOX_SESSION+x}" ]; then OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION; fi
+      # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93).
+      export OMABOX_AGENT_PID=$$
       exec "$@" ;;
     ""|on|off) ;;
     *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
