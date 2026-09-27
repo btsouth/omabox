@@ -13,6 +13,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   30 minutes idle instead of 2 hours. `-b NAME` and `OMABOX=NAME` work as before;
   `OMABOX_SESSION=` (empty) turns this off.
 
+### Fixed
+
+- `omabox up` no longer exits silently when git has no global `user.name` or `user.email`, as on a
+  fresh machine.
+
 ## 0.1.2 — 2026-09-26
 
 Apps installed inside a box start from the launcher, and pull requests get a check.

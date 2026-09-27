@@ -539,10 +539,12 @@ seed_home() {
     cp /usr/share/omarchy/applications/*.desktop "$h/.local/share/applications/" 2>/dev/null || true
   fi
   # Git's identity only (finding 48): commits and release dry-runs need one. Never the rest of the
-  # user's git config (credential helpers, tokens in URLs).
+  # user's git config (credential helpers, tokens in URLs). A value that is not set is skipped, not a
+  # failure that ends `up` under set -e (finding 91); from /, so a broken repo in $PWD cannot fail it.
   local key val
   for key in user.name user.email; do
-    val=$(git config --global "$key" 2>/dev/null) && git config --file "$h/.gitconfig" "$key" "$val"
+    val=$(git -C / config --global "$key" 2>/dev/null) || continue
+    git -C / config --file "$h/.gitconfig" "$key" "$val"
   done
 }
 

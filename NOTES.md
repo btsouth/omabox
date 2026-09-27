@@ -1083,6 +1083,15 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
     (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
     user passes `-b` to `peek` or `shot` an agent's box.
+91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
+    user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
+    `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
+    (a fresh machine) that lookup fails, `seed_home` returns 1, and `set -e` ends `up` right after
+    the box dir is made: exit 1, no message. Found running the suite from a git worktree: in the
+    stand-in host the worktree's `.git` file points at a gitdir that is not mounted, so every git
+    command there fails with 128, `--global` lookups included, and `t_guard`'s inner `up` died.
+    A value that is not set is now skipped, and the lookups run from `/`. `t_no_git_identity`
+    starts a box with `GIT_CONFIG_GLOBAL=/dev/null` (exit 1 before the fix).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

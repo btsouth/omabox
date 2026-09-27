@@ -589,6 +589,14 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
+# finding 91: no global git identity (a fresh machine) is no reason for `up` to fail.
+t_no_git_identity() {
+  local B=$P-nogit
+  check "up with no git identity" env GIT_CONFIG_GLOBAL=/dev/null "$CLI" up "$B" --no-shell
+  check_fails "...and the box has none" ob run -b "$B" -- git config --global user.email
+  check "down" ob down "$B"
+}
+
 # A stale pid (the box died, the pid now belongs to someone else) is never killed or entered.
 t_stale_pid() {
   local B=$P-stale D=$XDG_RUNTIME_DIR/omabox/$P-stale
@@ -1014,7 +1022,7 @@ t_guard() {
 
 UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
 BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
