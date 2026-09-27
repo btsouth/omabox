@@ -15,8 +15,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
-- `omabox up` no longer exits silently when git has no global `user.name` or `user.email`, as on a
-  fresh machine.
+- `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
 
 ## 0.1.2 — 2026-09-26
 
