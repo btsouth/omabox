@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- `omabox up` no longer exits silently when git has no global `user.name` or `user.email`, as on a
+  fresh machine.
+
 ## 0.1.2 — 2026-09-26
 
 Apps installed inside a box start from the launcher, and pull requests get a check.

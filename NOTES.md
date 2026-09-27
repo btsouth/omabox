@@ -1065,6 +1065,15 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     --user list --activatable` until its first activation or a `ReloadConfig`. `seed_home` now creates
     the dir. Checked in plain and `--systemd` boxes before and after; `t_dbus_user_app` and `t_systemd`
     install an app after `up` and launch it with `gtk-launch` (all five checks fail without the fix).
+91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
+    user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
+    `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
+    (a fresh machine) that lookup fails, `seed_home` returns 1, and `set -e` ends `up` right after
+    the box dir is made: exit 1, no message. Found running the suite from a git worktree: in the
+    stand-in host the worktree's `.git` file points at a gitdir that is not mounted, so every git
+    command there fails with 128, `--global` lookups included, and `t_guard`'s inner `up` died.
+    A value that is not set is now skipped, and the lookups run from `/`. `t_no_git_identity`
+    starts a box with `GIT_CONFIG_GLOBAL=/dev/null` (exit 1 before the fix).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
