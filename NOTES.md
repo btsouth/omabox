@@ -205,7 +205,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
 24. **The host does not render a hidden window**: with the box on workspace 9 out of sight, screencopy in
     the box never completes and `grim` blocks forever (it hung `up`'s bar-settle wait). Interactive boxes
     skip that wait; every grim call has a timeout and `shot` says why it failed. Screenshots are for
-    headless boxes; interactive ones are for the user's eyes.
+    headless boxes; interactive ones are for the user's eyes. (Replaced by finding 90: a hidden
+    interactive box is drawn now, at the host's `misc.render_unfocused_fps`.)
 25. **Closing an interactive box's window** only removes its output; Hyprland idled screenless. It now
     exits when its last monitor goes, and `session.sh` then `kill -KILL -1`s the namespace: bwrap's PID 1
     only exits once it has no children, and the shell's helpers (inotifywait, wl-paste) outlive
@@ -1091,15 +1092,23 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     workspace = "9" }))'` before every click and shot, then focus back to workspace 1, dozens of
     times. The exec rule now adds `render_unfocused = true`: the host sends the hidden window frame
     callbacks (at `misc.render_unfocused_fps`, 15 by default), the box's Hyprland keeps drawing, and
-    `shot`, `click` and `keys` all work with the window out of sight. The rule only counts at map
-    time: `set_prop` on an existing window sets the prop (getprop says true) but it stays undrawn,
-    even after showing and hiding it, so boxes started before this need a restart. `up` records
-    `drawn_hidden` in box.json and `shot`'s failure message tells those apart; neither message
-    suggests showing the window, both say not to. The skill says the same under `omabox host`.
+    `shot`, `click` and `keys` all work with the window out of sight. Hyprland applies the rule
+    whenever it re-checks the window's rules (on focus, a move to another workspace, a config
+    reload), and that re-check overwrites what `set_prop` set on its own: `set_prop` on an existing
+    window reports true (getprop says so) but the window stays undrawn. A box started before this
+    probably starts drawing after its first re-check; to be sure it needs a restart, which ends
+    the user's session in it, so `shot`'s message for such a box says to ask the user rather than
+    to restart it. `up` records `drawn_hidden` in box.json to tell those apart; neither message
+    suggests showing the window, both say not to. The skill says the same under `omabox host`, and
+    that a box the user started is named after the repo (finding 88): an agent passes `-b NAME` to
+    reach it. The cost: a hidden interactive box running something animated now keeps drawing at
+    15 fps where it used to stop, and interactive boxes never idle out.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
-    with the stand-in's workspace and focus unchanged throughout. `t_guard` checks the shot and the
-    workspace. Not yet checked on the real desktop.
+    with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
+    workspaces 9 and 3 and the scratchpad (non-empty PNGs, the stand-in's workspace and focused
+    window unchanged), and `t_unit_cli` checks the message for a box without `drawn_hidden`. Not
+    yet checked on the real desktop.
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
     `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
@@ -1127,7 +1136,5 @@ Bugs and ideas live in the GitHub issues. Known gaps:
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
 - Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
-- `omabox shot` of an interactive box while its window is visible is untested (it only fails fast
-  when hidden).
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
   user setups remain open.

@@ -1160,10 +1160,10 @@ cmd_shot() {
   if ! on_box timeout 10 "${grim[@]}" - > "$out.part" || [ ! -s "$out.part" ]; then
     rm -f "$out.part"
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
-    # box exists to avoid. A box from before drawn_hidden needs a restart instead.
+    # box exists to avoid. A box from before drawn_hidden needs a restart, which is the user's to do.
     if [ "$(meta mode)" = interactive ]; then
       [ "$(meta drawn_hidden)" = true ] ||
-        die "shot: no frame from interactive box '$NAME': it was started by an older omabox, which does not draw its window while hidden. Restart it (omabox down $NAME, then up --interactive again) or ask the user; never switch the user's workspace or focus to get a frame"
+        die "shot: no frame from interactive box '$NAME': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
       die "shot: no frame from interactive box '$NAME' ($(ws_text "$(meta workspace)")); never switch the user's workspace or focus to get one"
     fi
     die "shot: grim failed"

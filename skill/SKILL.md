@@ -179,8 +179,10 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   taking focus. Only when the user asks to watch; it does not affect the box.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives (SUPER+ALT+ESCAPE
   sends SUPER keys to it). Only when the user asks for it. `shot`, `click` and `keys` work on it while
-  its window is hidden; never bring that window forward yourself. When the user has to act in it (a
-  login), tell them which workspace it is on and let them go there. `omabox config` holds the user's
+  its window is hidden; never bring that window forward yourself. A box the user started is named
+  after the repo, not your session: pass `-b NAME` to `shot`, `click` or `keys` it (`omabox ls` shows
+  it). When the user has to act in it (a login), tell them which workspace it is on and let them go
+  there. `omabox config` holds the user's
   settings: change them only when the user asks.
 
 ## When a box cannot test it: real hardware and the real session

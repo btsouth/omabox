@@ -276,6 +276,23 @@ t_agent_session() {
   ob down "$b1" "$b3" >/dev/null 2>&1
 }
 
+# finding 90: when an interactive box gives no frame, `shot` never says to show its window, and for a
+# box started before drawn_hidden it says to ask the user (a restart ends their session in it).
+t_unit_shot_hidden() {
+  local d=$TMP/boxes/oldbox out
+  mkdir -p "$d"
+  shot_msg() { bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1; }
+  echo '{"mode": "interactive", "workspace": "9"}' > "$d/box.json"
+  out=$(shot_msg)
+  check_match "an old interactive box: it needs a restart, ask the user" "needs a restart.*ask the user" "$out"
+  check_fails "...not told to restart it" grep -q "omabox down" <<<"$out"
+  echo '{"mode": "interactive", "workspace": "9", "drawn_hidden": true}' > "$d/box.json"
+  out=$(shot_msg)
+  check_match "a new one: never switch the user's workspace for a frame" "never switch the user's workspace or focus" "$out"
+  check_fails "...and no restart" grep -q restart <<<"$out"
+  check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
+}
+
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
 # pid namespace without /opt/omabox (where a broken guard could only kill that namespace).
 t_unit_uwsm_guard() {
@@ -979,15 +996,25 @@ t_guard() {
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
-  # render_unfocused (finding 90): a shot while its window is hidden, and the host's workspace stays
-  check "...shot while its window is hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden.png
+  # render_unfocused (finding 90): a shot while its window is hidden; the stand-in's workspace and
+  # focused window stay as they were
+  local aw0; aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
+  check "...shot while its window is hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden-inner.png
+  check "...a PNG with something in it" "${in[@]}" test -s /tmp/hidden-inner.png
   check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
+  check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
   check "up --interactive on the scratchpad (config)" "${in[@]}" bash -c "'$CLI' config workspace special >/dev/null && '$CLI' up wsp --interactive --no-shell; '$CLI' config workspace default >/dev/null"
   check_eq "...on workspace 3 and the scratchpad" "3 special:scratchpad" "$(ob hyprctl -b "$B" -j clients | jq -r '[.[] | select(.class == "aquamarine") | .workspace.name] | sort | join(" ")')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
+  local b; for b in ws3 wsp; do
+    check "...shot of $b while hidden" "${in[@]}" "$CLI" shot -b "$b" -o "/tmp/hidden-$b.png"
+    check "...a PNG with something in it" "${in[@]}" test -s "/tmp/hidden-$b.png"
+  done
+  check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
+  check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
   "${in[@]}" "$CLI" down ws3 >/dev/null 2>&1; "${in[@]}" "$CLI" down wsp >/dev/null 2>&1
   # confirm-close: the first close opens a new window and asks, a second one ends the box; off, one
   # close ends it; `omabox config` changes a running box that took it from the config
@@ -1023,7 +1050,7 @@ t_guard() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
 BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
