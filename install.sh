@@ -102,7 +102,17 @@ if [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ] || [ -d "${CODEX_HOME:-$HOME/.co
   state=$("$ROOT/bin/omabox" guard) || true
   states=$(grep -E '^(Claude Code|Codex|claude|codex)' <<<"$state" || true)
   echo "$states"
-  if grep -qv ': on$' <<<"$states"; then
+  if grep -qv ': on$' <<<"$states" && ! grep -v ': on$' <<<"$states" | grep -qv ': outdated'; then
+    # Every agent has the guard from an older omabox: an update of what the user already said yes to,
+    # so a "no" to turning it on does not hold it back.
+    echo "Your agents have the guard from an older omabox (omabox guard shows what it does)."
+    if [ -t 0 ] && [ -t 1 ]; then
+      read -r -p "Update it? [Y/n] " yn
+      [[ $yn = [nN]* ]] || "$ROOT/bin/omabox" guard on || echo "the guard is not (fully) updated, see above; the rest of the install is done"
+    else
+      echo "not asked (no terminal): omabox guard on"
+    fi
+  elif grep -qv ': on$' <<<"$states"; then
     echo "It gives your agents' shell commands a display that does not exist, so a window, hyprctl or"
     echo "grim outside a box fails instead of reaching your desktop. omabox keeps working, and"
     echo "\`omabox host -- CMD\` runs what you ask for on the real desktop. See: omabox guard"

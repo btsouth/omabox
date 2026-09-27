@@ -1101,18 +1101,30 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     process singleton hands the URL over before it needs a display. On a host with
     `misc:focus_on_activate` that can also take focus. `gh ... --web` goes the same way through
     `$GH_BROWSER`, `$BROWSER` or xdg-open. `share/guard/xdg-open` refuses
-    with a note (give the user the link; look at it in a box; `omabox host` when asked). `BROWSER` and
+    with a note (give the user the link; look at it in a box; `omabox host` when asked) and exit 4,
+    xdg-open's code for a failed action. `BROWSER` and
     `GH_BROWSER` name it for every guarded agent; Claude Code's hook and `guard exec` also put
     `share/guard` first on PATH. Codex's `shell_environment_policy.set` only sets values (no PATH
-    prefix), so a plain `xdg-open` from Codex is not covered. `omabox host` drops the PATH entry and
-    takes `BROWSER`/`GH_BROWSER` from the user manager (or unsets them). The caller's PATH that `up`
+    prefix), so a plain `xdg-open` from Codex is not covered (real xdg-open uses the desktop's URL
+    handler before `$BROWSER`). `omabox host` drops the PATH entry, and a `BROWSER`/`GH_BROWSER` that
+    is the stand-in gives way to the user manager's value or none; any other value stays (Omarchy
+    sets `BROWSER` in the shell, never in the user manager). Both match any checkout's
+    `*/share/guard`, since a hook written from another clone or worktree names its own. The caller's PATH that `up`
     gives a box session and `run` gives a command leaves the entry out, so links open in a box as
     before (this repo is mounted in boxes the suite starts, so the entry would be visible there).
-    The guard's settings now hold the checkout's path, so `guard on` and `guard exec` refuse a path
-    with characters that would need quoting. Not covered, and no variable reaches them: Python's
+    The guard's settings now hold the checkout's path, so `guard on` refuses a path with characters
+    that would need quoting in a settings file (`guard exec` exports it, which takes any path). An
+    update that changes the guard makes it read "outdated", and `install.sh` then asks "Update it?"
+    rather than "Turn it on?" (a "no" to turning it on does not hold an update back). If the
+    checkout a hook names is gone (a removed worktree), its PATH entry quietly stops working and
+    `xdg-open` reaches the desktop again: `omabox guard` says so for that agent. Not covered, and no variable reaches them: Python's
     `webbrowser` tries the next browser when one fails (under the guard its order was the stand-in,
     `xdg-open`, `gio`, `chromium`); npm's `open` runs the copy of xdg-open it ships; a browser
-    started directly with a URL (Arch's `chromium` launcher takes flags from a file only).
+    started directly with a URL (Arch's `chromium` launcher takes flags from a file only); and
+    `omarchy-launch-browser` / `omarchy-launch-webapp`, which go through `uwsm-app` and the user
+    manager, as the guard's other gaps do. Per-browser wrappers were considered and left out: a fake
+    `chromium` would break `chromium --headless`, which agents use on purpose, the list of names
+    never ends, and Codex would not get them.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -742,6 +742,13 @@ t_unit_install() {
   check_eq "the skill is a link" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
+  # finding 92: an older hook of ours is an update to offer, even after a "no" to turning it on.
+  jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]}}' > "$h/.claude/settings.json"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "an outdated guard: install.sh offers to update it" "older omabox.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...and changes nothing without a terminal" "echo old omabox-guard" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$h/.claude/settings.json")"
+  rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
 }
@@ -873,6 +880,8 @@ t_unit_guard_settings() {
   check_eq "off gives back the same file" "$orig" "$(cat "$s")"
   jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]' <<<"$orig" > "$s"
   check_match "an older hook of ours reads outdated" "outdated" "$(g | head -1)"
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[-1].hooks[0].command = $c' "$s" > "$s.new" && mv "$s.new" "$s"
+  check_match "...and one from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | head -1)"
   g on >/dev/null
   check_eq "on replaces it" 1 "$(jq '[.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard"))] | length' "$s")"
   mv "$s" "$h/real.json"; ln -s "$h/real.json" "$s"
@@ -929,6 +938,9 @@ t_unit_guard_settings() {
   g on codex >/dev/null
   check_eq "Codex: its own [shell_environment_policy] is kept, the guard added" "core omabox-guard" \
     "$(python3 -c 'import tomllib, sys; p = tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]; print(p["inherit"], p["set"]["HYPRLAND_INSTANCE_SIGNATURE"])' "$c")"
+  printf '%s\n' "# >>> omabox guard (\`omabox guard off\` removes this block)" "[shell_environment_policy.set]" \
+    'WAYLAND_DISPLAY = "omabox-guard"' 'BROWSER = "/nonexistent/co/share/guard/xdg-open"' "# <<< omabox guard" > "$c"
+  check_match "Codex: a block from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | grep '^Codex')"
   printf 'x = \n' > "$c"
   check_match "Codex: a file that is not TOML is refused" "not valid TOML" "$(g on codex)"
   check_eq "...untouched" 'x = ' "$(cat "$c")"
@@ -953,6 +965,9 @@ t_unit_guard_exec_host() {
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
   check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
+  check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
+  check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
+    "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host

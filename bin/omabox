@@ -262,9 +262,10 @@ caller_env() {
 }
 
 # The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
+# Any checkout's: a hook written from another clone or worktree names its own.
 caller_path() {
   local d out=() dirs; IFS=: read -ra dirs <<<"${PATH:-}"
-  for d in "${dirs[@]}"; do [ "$d" = "$GUARD_PATH" ] || out+=("$d"); done
+  for d in "${dirs[@]}"; do case $d in */share/guard) ;; *) out+=("$d") ;; esac; done
   local IFS=:; printf '%s' "${out[*]}"
 }
 
@@ -1498,9 +1499,19 @@ guard_claude() {
   fi
   local want
   case $1 in
-    state) jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
-      [.hooks.SessionStart[]?.hooks[]? | select(ours)]
-      | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur"
+    state)
+      local line dir
+      line=$(jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
+        [.hooks.SessionStart[]?.hooks[]? | select(ours)]
+        | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur")
+      # A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
+      if [[ $line == *": outdated" ]]; then
+        while IFS= read -r dir; do
+          [ -x "$dir/xdg-open" ] || line+=": its $dir is gone, so links open on the desktop again"
+        done < <(jq -r --arg g "$GUARD" "$GUARD_JQ"'.hooks.SessionStart[]?.hooks[]? | select(ours) | .command' <<<"$cur" |
+          grep -o 'PATH="[^"]*/share/guard:' | sed 's/^PATH="//; s/:$//')
+      fi
+      echo "$line"
       return ;;
     on) want=$(jq --arg g "$GUARD" --arg c "$GUARD_HOOK" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
     off) want=$(jq --arg g "$GUARD" "$GUARD_JQ"' strip' <<<"$cur") ;;
@@ -1516,7 +1527,7 @@ guard_codex() {
   [ ! -L "$file" ] || file=$(readlink -f "$file")
   local out
   out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
-import sys, tomllib
+import os, sys, tomllib
 mode, path, block = sys.argv[1:]
 try:
     cur = open(path).read()
@@ -1565,6 +1576,12 @@ b = find(cur)
 on = bool(b) and b[2][:len(mine)] == mine
 if mode == "state":
     state = "off" if not b else ("on" if on else "outdated")
+    # A block written from a checkout that is gone (a removed worktree) no longer stops gh --web.
+    for l in (b[2] if b and not on else []):
+        if l.startswith("BROWSER = "):
+            stand_in = l.split(" = ", 1)[1].strip('"')
+            if not os.access(stand_in, os.X_OK):
+                state += f": its {os.path.dirname(stand_in)} is gone, so links open on the desktop again"
     print(f"STATE Codex ({path}): {state}")
     sys.exit()
 base = strip(cur)
@@ -1590,7 +1607,7 @@ PY
   esac
 }
 
-# The guard's paths go into agents' settings unquoted: only a plain path for the omabox checkout.
+# The guard's paths go into agents' settings files unquoted: only a plain path for the omabox checkout.
 guard_root() {
   [[ $ROOT =~ ^[A-Za-z0-9._/+-]+$ ]] || die "the guard needs omabox at a path of letters, digits and ._/+- only, not $ROOT"
 }
@@ -1608,7 +1625,6 @@ cmd_guard() {
       # OMABOX_SESSION says otherwise.
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
-      guard_root
       export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
       if [ -z "${OMABOX_SESSION+x}" ]; then OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION; fi
       exec "$@" ;;
@@ -1655,10 +1671,12 @@ cmd_host() {
   local path; path=$(caller_path)
   export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG" PATH="$path"
   unset QT_FORCE_STDERR_LOGGING
-  # The user's browser as the user manager has it, not the guard's (finding 92).
+  # The guard's browser stand-in (finding 92, any checkout's) gives way to the user manager's value, or
+  # none. A BROWSER the guard did not set stays: Omarchy sets it in the shell, not the user manager.
   for v in BROWSER GH_BROWSER; do
+    case ${!v:-} in */share/guard/xdg-open) ;; *) continue ;; esac
     val=$(sed -n "s/^$v=//p" <<<"$sysenv")
-    if [ -n "$val" ] && [ "$val" != "$GUARD_PATH/xdg-open" ]; then export "$v=$val"; else unset "$v"; fi
+    case $val in ""|*/share/guard/xdg-open) unset "$v" ;; *) export "$v=$val" ;; esac
   done
   ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
   say "on your real desktop: $*"
