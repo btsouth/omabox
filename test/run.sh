@@ -437,6 +437,30 @@ t_isolated() {
   kill "$other" 2>/dev/null
 }
 
+# A connected box must not claim the host's abstract X11 :0 socket. It still needs ordinary
+# network access in both directions for app previews and local test servers.
+t_connected_x11() {
+  local B=$P-x11 host_screen box_screen srv
+  host_screen=$("$CLI" host -- xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')
+  check_match "host X11 screen available" '^[0-9]+ x [0-9]+$' "$host_screen"
+  check "connected box with Xwayland starts" ob up "$B" --no-shell --xwayland --size 1600x900
+  check_fails "connected box has a separate network namespace" \
+    test "$(readlink "/proc/$(cat "$(ob path -b "$B")/pid")/ns/net")" = "$(readlink /proc/self/ns/net)"
+  box_screen=$(ob run -b "$B" -- env DISPLAY=:0 xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')
+  check_eq "labwc X11 stays inside the box" '1600 x 900' "$box_screen"
+  check_eq "host X11 still sees its own screen" "$host_screen" \
+    "$("$CLI" host -- xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')"
+  mkdir -p "$TMP/www" && echo connected > "$TMP/www/index.html"
+  # Its own variable: HTTP_PID is t_isolated's server, which the EXIT trap still has to stop.
+  python3 -m http.server 8095 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & srv=$!
+  check_eq "connected box reaches host localhost" connected \
+    "$(ob run -b "$B" -- curl -fsS --retry 3 --retry-connrefused --max-time 3 http://127.0.0.1:8095/)"
+  ob run -b "$B" -d -- python3 -m http.server 8096 --bind 127.0.0.1 >/dev/null
+  check "host reaches connected box localhost" until_ok 5 curl -fsS --max-time 2 http://127.0.0.1:8096/
+  check "down" ob down "$B"
+  kill "$srv" 2>/dev/null
+}
+
 t_idle() {
   local B=$P-idle
   check "up --idle 10s" ob up "$B" --idle 10s --no-shell
@@ -542,8 +566,8 @@ t_race() {
   ob up "$B" --no-shell >/dev/null 2>&1 & local a=$!
   ob up "$B" --no-shell >/dev/null 2>&1 & local b=$!
   wait $a; wait $b
-  # bwrap is two processes per box (its monitor, and the box's PID 1)
-  check_eq "one box" 2 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  # pasta and bwrap hold three process entries: pasta, bwrap's monitor and the box's PID 1.
+  check_eq "one box" 3 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
   check "down" ob down "$B"
   sleep 0.5
   check_eq "nothing of it left running" 0 "$(pgrep -fc "$XDG_RUNTIME_DIR/omabox/$B/" || true)"
@@ -1021,7 +1045,7 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected_x11 t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

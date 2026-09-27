@@ -23,9 +23,10 @@ say what replaced it.
 ```
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
                                   box.json (options, pidns), info.json (bwrap child-pid), pid + pasta.pid
-                                  (--net isolated), used (idle clock), launch.sh, box.log, reap.log
+                                  (top-level boxes),
+                                  used (idle clock), launch.sh, box.log, reap.log
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
-[pasta --splice-only]             --net isolated only: own netns, loopback, the --allow ports (44, 45)
+[pasta]                           own netns in every box; connected default, or loopback + --allow (89)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
@@ -1083,6 +1084,21 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
     (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
     user passes `-b` to `peek` or `shot` an agent's box.
+89. **A headless box captured host Steam's X11 display** (2026-09-26). A host-network box's lazy
+    labwc Xwayland claimed the abstract `@/tmp/.X11-unix/X0` socket while the real Xwayland still
+    owned the filesystem socket. Steam launched through the real `gtk-launch steam.desktop` scope,
+    but its X11 peer was the box's Xwayland: Steam logged a 1600x900 screen, and the real Hyprland
+    listed no Steam window. Stopping the box restored the host's 4480x1440 X11 display. Every new
+    box now runs behind pasta in a separate network namespace. The default connected mode keeps
+    internet, LAN and local port forwarding; `--net isolated` keeps its restricted loopback.
+    In a connected test box, labwc's `:0` reported 1600x900 while the host's X11 still reported
+    4480x1440. Host localhost and internet requests worked from the box, and a box localhost
+    server was reachable from the host with `--host-lo-to-ns-lo`. `t_connected_x11` checks both screens,
+    the separate namespace and localhost in both directions. A nested box uses bwrap's `--unshare-net` because pasta cannot create
+    its additional user namespace there; it has no external route. Boxes started before this
+    change keep the host's namespace until down, and `run` joins a box's network namespace only
+    when it differs from its own: entering the host's from the box's user namespace is EPERM
+    ("reassociate to namespaces failed"; checked against a box started by 0.1.2).
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
     `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`

@@ -16,6 +16,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Fixed
 
 - `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
+- A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
+  could claim the host's abstract `:0` socket, and a host app (Steam) then opened in the box. Every
+  box now has its own network namespace through pasta; the default mode still reaches the internet,
+  the LAN and host `localhost` services, and `--net isolated` is unchanged.
 
 ## 0.1.2 — 2026-09-26
 

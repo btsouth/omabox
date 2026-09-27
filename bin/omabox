@@ -180,16 +180,16 @@ select_box() {
   D=$BOXES/$NAME
 }
 
-# The box's PID 1 on the host, or nothing. An isolated box runs inside pasta's pid namespace (Arch's
-# pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: isolated_pid
+# The box's PID 1 on the host, or nothing. Top-level boxes run inside pasta's pid namespace (Arch's
+# pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: pasta_pid
 # records the host one (and is asked again if `up` never got to it). A recorded pid is only the box's
 # while it is still in the box's own pid namespace (box.json `pidns`, written by `up`): after the box
 # died and the pid was reused, it is some other process of the user's, which `down` must not SIGKILL
 # and `run` must not enter.
 box_pid() {
   local pid
-  if [ "$(meta net)" = isolated ]; then
-    pid=$(cat "$D/pid" 2>/dev/null) || { isolated_pid && pid=$(cat "$D/pid" 2>/dev/null); } || true
+  if [ -f "$D/pasta.pid" ]; then
+    pid=$(cat "$D/pid" 2>/dev/null) || { pasta_pid && pid=$(cat "$D/pid" 2>/dev/null); } || true
   else
     pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
   fi
@@ -200,7 +200,7 @@ box_pid() {
   [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
   echo "$pid"
 }
-isolated_pid() {
+pasta_pid() {
   local inner pasta bw p
   inner=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) && [ -n "$inner" ] || return 1
   pasta=$(cat "$D/pasta.pid" 2>/dev/null) && bw=$(pgrep -P "$pasta" | head -1) || return 1
@@ -278,8 +278,10 @@ box_exec() {
   if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$PWD
   elif [ -n "$there" ] && jq -e --arg p "$PWD/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$PWD
   fi
-  # An isolated box's network too; a host-network box shares the host's, which is not ours to join.
-  local ns=(-U -m -p -u -i); [ "$(meta net)" = isolated ] && ns+=(-n)
+  # The box's own network namespace (every box has one since finding 89), so its local services are
+  # reachable. A box started before that shares the host's, which is not ours to join (EPERM).
+  local ns=(-U -m -p -u -i)
+  [ "$(readlink "/proc/$pid/ns/net")" = "$(readlink /proc/self/ns/net)" ] || ns+=(-n)
   # `run --pass VAR` (finding 66): the caller's values go through a pipe (printf is a builtin: no
   # argv), never on a command line, where the process list would show a password to every user.
   local pass=() pfd
@@ -694,7 +696,7 @@ cmd_up() {
   fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
-  [ "$net" = host ] || command -v pasta >/dev/null || die "--net isolated needs pasta: sudo pacman -S passt"
+  command -v pasta >/dev/null || die "network isolation needs pasta: sudo pacman -S passt"
   PLUGINS=()
   local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
   for p in "${PLUGINS[@]}"; do
@@ -781,8 +783,8 @@ cmd_up() {
   # checks for a systemd-booted system. @CGROUP@ is filled in inside the scope.
   [ $systemd = 0 ] || args+=(--unshare-cgroup --bind @CGROUP@ /sys/fs/cgroup --dir /run/systemd/system)
   # DNS (finding 52): /etc is the host's but /run is the box's, so a resolv.conf linking into /run
-  # (systemd-resolved's stub, NetworkManager's) points at nothing. A host-network box gets that one
-  # file; an isolated box has no network to resolve names for.
+  # (systemd-resolved's stub, NetworkManager's) points at nothing. A connected box gets that one
+  # file (pasta forwards the stub's port); an isolated box has no network to resolve names for.
   # (A link whose directory is missing makes readlink -f fail: no file to bind, not a silent exit.)
   local resolv; resolv=$(readlink -f /etc/resolv.conf) || resolv=""
   if [ "$net" = host ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
@@ -806,19 +808,29 @@ cmd_up() {
     [ -x "$WLFD" ] || die "missing $WLFD: run install.sh"
     launch=("$WLFD" "$HOST_WL" bwrap)
   fi
-  if [ "$net" = isolated ]; then
-    # pasta gives the box its own network with only a loopback (--splice-only: no interface, no
-    # route, so no internet and no LAN) and splices just the allowed ports to the host's loopback;
-    # every other direction is off explicitly, since pasta's default is to forward whatever is
-    # bound. Its namespace maps us to root, so bwrap maps back to our uid. pasta closes inherited
-    # fds: bwrap's info fd is opened inside it, and omabox-wlfd connects from inside (a unix socket).
+  # Every box has its own network namespace (finding 89): in the host's, labwc's lazy Xwayland could
+  # claim the host's abstract X11 :0 socket and host X11 apps would open in the box. The default mode
+  # keeps the internet, the LAN and host localhost (ports bound on either side are forwarded); an
+  # isolated box has only a loopback and the --allow ports. pasta maps us to root, bwrap maps back to
+  # our uid. pasta closes inherited fds: bwrap's info fd is opened inside it.
+  if [ "$net" = host ] && [ -f /opt/omabox/share/session.sh ]; then
+    # Nested boxes cannot create pasta's extra user namespace. Their stand-in host is already
+    # a box, so give the inner box its own network namespace without an external route.
+    launch+=(--unshare-net)
+  else
+    local pasta_args=(-q -P "$D/pasta.pid")
+    if [ "$net" = isolated ]; then
+      pasta_args+=(--splice-only -t none -u none -U none -T "${allow:-none}")
+    else
+      pasta_args+=(--config-net --host-lo-to-ns-lo -t auto -u auto -T auto -U auto)
+    fi
     # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
-    # isolated_pid to find the box's.
+    # pasta_pid to find the box's.
     # shellcheck disable=SC2016 # $0 and $@ belong to the inner sh
-    launch=(pasta -q --splice-only -t none -u none -U none -T "${allow:-none}" -P "$D/pasta.pid" --
+    launch=(pasta "${pasta_args[@]}" --
       sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)")
   fi
-  # --systemd: the whole box (pasta too) runs in a transient scope of the user's manager that delegates
+  # --systemd: the whole box (including pasta when used) runs in a transient scope that delegates
   # its cgroup, the only way an unprivileged sandbox gets a cgroup subtree of its own to manage. The
   # scope goes by itself once everything in it has died (`down` kills PID 1).
   local sdenv=()
@@ -901,7 +913,7 @@ lua_str() {
 }
 
 # SIGKILL the box's PID 1 (the kernel then kills everything in its pid namespace; SIGTERM is ignored,
-# finding 6) and pasta's, if it is isolated; wait for them, at most 10 s. The dir stays.
+# finding 6) and pasta's; wait for them, at most 10 s. The dir stays.
 kill_box() {
   local pid pasta
   pid=$(box_pid) || true
@@ -909,8 +921,8 @@ kill_box() {
   [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
   # A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
   [ -n "$pid" ] && pkill -CONT -f "^nsenter -t $pid " 2>/dev/null
-  # An isolated box whose pid was never found: pasta's own pid namespace holds it, end that instead.
-  if [ -n "$pasta" ] && [ "$(cat "/proc/$pasta/comm" 2>/dev/null)" = pasta ]; then
+  # A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
+  if [ -n "$pasta" ] && (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- "-P $D/pasta.pid"; then
     kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null
   fi
   local end=$((SECONDS + 10))
@@ -1101,7 +1113,7 @@ cmd_run() {
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
-  # replaced by a throwaway: that would run the command on the host network without the box's mounts
+  # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
   # (its --net isolated included), and hide what happened to it.
   [ -z "$name" ] && [ -z "${OMABOX:-}" ] && [ ! -d "$D" ] && [ ! -f "$BOXES/.expired-$NAME" ] || need_box
   # Throwaway box for this one command. The repo is an overlay: the command can write build

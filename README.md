@@ -272,9 +272,11 @@ and every other socket, omabox's included).
   keyrings or tokens).
 - Private session bus, private throwaway keyring (secrets are stored and read without prompts),
   no system bus, no real input devices, no audio, no Xwayland (unless you pass `--xwayland`).
-- The network is shared with the host, unless you start the box with `--net isolated`: then it has
-  only a loopback, no internet or LAN, and reaches just the host ports you list with `--allow`
+- Every box has its own network namespace, so its X11 sockets cannot capture host applications.
+  The default `--net host` mode uses pasta for internet, LAN and local port access. With
+  `--net isolated`, the box has only a loopback, no internet or LAN, and reaches just the host ports you list with `--allow`
   (`omabox up --net isolated --allow 8081,8082`), so your real local services are out of reach.
+  A box started inside another box has a private network namespace without an external route.
   Works for headless and interactive boxes (needs `passt`, which `install.sh` installs).
 - Safety invariant: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your
   real `$XDG_RUNTIME_DIR`. Those are what keep its Hyprland off your real seat.
@@ -286,8 +288,8 @@ and every other socket, omabox's included).
   way: while that window has focus (in passthrough, SUPER binds too), what runs in the box reads
   what you type.
 - `omabox down` deletes the box and its HOME, so what a plugin or app changed in there is gone. It
-  cannot undo what reached outside: with the default host network, a box reaches the internet, your
-  LAN, your `localhost` services and the host's abstract Unix sockets, so API calls, uploads or
+  cannot undo what reached outside: with the default connected network, a box reaches the internet, your
+  LAN and your `localhost` services, so API calls, uploads or
   changes to a server are real. Use `--net isolated` when that matters.
 - Commands you run on the host are not boxed: a project's `sudo ./setup ...`, or `omabox host --
   CMD`, change your real system.
@@ -303,7 +305,7 @@ final release acceptance.
 ## How it works
 
 ```
-[pasta]                        --net isolated only: a loopback and the --allow ports, nothing else
+[pasta]                        private netns; connected by default, or loopback and --allow ports with --net isolated
 └ bwrap (pid/ipc/uts namespaces, fake HOME, private /run/user/$UID and /tmp)
   └ share/session.sh           the session: private bus (dbus-daemon), keyring, PATH, env
     ├ [systemd --user]         --systemd only (in its own delegated cgroup scope)
@@ -329,7 +331,7 @@ Wayland connection.
 | `spike/` | the original proof of concept |
 
 Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/`: `box.json` (its options), `info.json` (bwrap's
-pids; `pid` and `pasta.pid` for an isolated box), `run/` (the box's runtime dir), `used` (idle clock),
+pids; `pid` and `pasta.pid` for top-level boxes), `run/` (the box's runtime dir), `used` (idle clock),
 `reap.log`, `box.log`. The
 box's HOME (`omabox path` → `home/`, on disk in `~/.cache/omabox/<name>/home`, removed on `down`) and
 logs are readable from the host.

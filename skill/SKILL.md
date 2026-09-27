@@ -35,8 +35,8 @@ into a box, it goes to the user.
 
 A box is a fresh desktop with a fresh HOME: apps start as on first run. If a first-run screen offers
 to use a real local service (a server on 127.0.0.1, the user's account), do not pick it: boxes share
-the host network, so it would be the user's real data. Use a test service or ask. For an app that
-talks to local servers, prefer `omabox up --net isolated --allow 8081` (only the listed host ports,
+the host's reachable services, so it would be the user's real data. Use a test service or ask. For an
+app that talks to local servers, prefer `omabox up --net isolated --allow 8081` (only the listed host ports,
 no internet): then the real service cannot be reached by mistake.
 
 `omabox help` has every flag. The box name defaults to the current git repo's directory name plus
@@ -142,8 +142,10 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   is fake (`omabox path` → `<dir>/home`, readable and writable from the host): put outputs there or in
   `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
 - Private session bus, private keyring (store/lookup secrets freely, no prompts), no system bus, no
-  real input devices, no audio. Network is shared with the host (so the user's real local services
-  are reachable: leave them alone unless asked) unless the box was started with `--net isolated`.
+  real input devices, no audio. Every box has a private network namespace, which keeps its X11
+  sockets away from host apps. The default mode still reaches the internet, LAN and host local
+  services through pasta; leave those services alone unless asked. `--net isolated` limits access
+  to explicitly allowed host ports.
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. Only processes and the screen are the
   box's. A widget reading those shows host hardware state, not box state.
