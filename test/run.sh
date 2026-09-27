@@ -821,7 +821,8 @@ t_widget() {
 
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
-GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
+  BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER="$ROOT/share/guard/xdg-open" PATH="$ROOT/share/guard:$PATH")
 t_unit_host_session() {
   check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
   local found; found=$("${GUARDED[@]}" bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
@@ -890,6 +891,9 @@ t_unit_guard_settings() {
   local hook; hook=$(lib eval 'printf %s "$GUARD_HOOK"')
   check_match "the hook says so when it cannot apply the guard (finding 74)" "NOT applied" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
   check_eq "...and applies it when it can" 1 "$(f=$TMP/envfile; CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  # (the hook of the suite's copy of the CLI: its checkout is $TMP/lib)
+  check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$TMP/lib/share/guard" \
+    "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$TMP/envfile")"
   check_fails "guard junk refused" g maybe
   check_fails "guard on for an unknown agent refused" g on vim
   # Codex (finding 67): a marked block in config.toml, checked as TOML; only when Codex is installed.
@@ -934,12 +938,21 @@ t_unit_guard_settings() {
 t_unit_guard_exec_host() {
   check_eq "guard exec: the guard's display" omabox-guard "$("$CLI" guard exec -- sh -c 'echo $WAYLAND_DISPLAY')"
   check_eq "guard exec: a core limit of 1 byte (no crash notification)" 1 "$("$CLI" guard exec -- sh -c 'prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "')"
+  # finding 92: no links or files opened on the desktop, however they are asked for.
+  check_match "guard exec: xdg-open refuses" "omabox guard: not opening https://example.com" \
+    "$("$CLI" guard exec -- xdg-open https://example.com 2>&1)"
+  check_fails "...with a failure" "$CLI" guard exec -- xdg-open https://example.com
+  check_eq "...and BROWSER, GH_BROWSER name it" "$ROOT/share/guard/xdg-open $ROOT/share/guard/xdg-open" \
+    "$("$CLI" guard exec -- sh -c 'echo $BROWSER $GH_BROWSER')"
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
   # suite) that is the guard's.
   local sig want; sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
   want=$(hyprctl -j instances | jq -r --arg s "$sig" '.[] | select(.instance == $s) | .wl_socket')
   check_eq "host from a guarded shell: the real Wayland display" "$want" "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY' 2>/dev/null)"
   check "host: and hyprctl reaches it (read-only)" "${GUARDED[@]}" "$CLI" host -- hyprctl -j version
+  local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
+  check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
+  check_fails "...not the guard's" grep -q share/guard <<<"$open"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
@@ -954,6 +967,10 @@ t_guard() {
   check_match "run under the guard gets the box's display" '^wayland-' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')"
   check "hyprctl under the guard" "${GUARDED[@]}" "$CLI" hyprctl -b "$B" -j version
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
+  # finding 92: the guard's xdg-open stays out of a box (this repo is mounted in it, so it could be seen).
+  check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
+  check_fails "...and the box session's PATH lacks the guard's" "$CLI" run -b "$B" -- \
+    sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH=" | grep -q share/guard'
   # Inside the stand-in host: the guard as an agent's shell there would have it.
   local in=("$CLI" run -b "$B" -- "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.

@@ -1092,6 +1092,27 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     command there fails with 128, `--global` lookups included, and `t_guard`'s inner `up` died.
     A value that is not set is now skipped, and the lookups run from `/`. `t_no_git_identity`
     starts a box with `GIT_CONFIG_GLOBAL=/dev/null` (exit 1 before the fix).
+92. **The guard let agents open links on the desktop** (2026-09-26). The guard takes the display away,
+    but a browser already running there takes a URL over its own socket. Checked in a box standing
+    in for the host (Chromium running in it, then from a shell with the guard's variables):
+    `xdg-open https://example.com` printed "Opening in existing browser session", exit 0, and the
+    running Chromium opened the tab, focused. xdg-open sees a non-empty `WAYLAND_DISPLAY`
+    (`omabox-guard`), so it uses the `x-scheme-handler` desktop entry (`chromium %U`), and Chromium's
+    process singleton hands the URL over before it needs a display. On a host with
+    `misc:focus_on_activate` that can also take focus. `gh ... --web` goes the same way through
+    `$GH_BROWSER`, `$BROWSER` or xdg-open. `share/guard/xdg-open` refuses
+    with a note (give the user the link; look at it in a box; `omabox host` when asked). `BROWSER` and
+    `GH_BROWSER` name it for every guarded agent; Claude Code's hook and `guard exec` also put
+    `share/guard` first on PATH. Codex's `shell_environment_policy.set` only sets values (no PATH
+    prefix), so a plain `xdg-open` from Codex is not covered. `omabox host` drops the PATH entry and
+    takes `BROWSER`/`GH_BROWSER` from the user manager (or unsets them). The caller's PATH that `up`
+    gives a box session and `run` gives a command leaves the entry out, so links open in a box as
+    before (this repo is mounted in boxes the suite starts, so the entry would be visible there).
+    The guard's settings now hold the checkout's path, so `guard on` and `guard exec` refuse a path
+    with characters that would need quoting. Not covered, and no variable reaches them: Python's
+    `webbrowser` tries the next browser when one fails (under the guard its order was the stand-in,
+    `xdg-open`, `gio`, `chromium`); npm's `open` runs the copy of xdg-open it ships; a browser
+    started directly with a URL (Arch's `chromium` launcher takes flags from a file only).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
