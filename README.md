@@ -105,8 +105,9 @@ Boxes are named after the current git repo, so agents in different repos never s
 two repos have the same directory name: pass `-b` then). Inside a Claude Code or Codex session (or
 an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`, so
 two agents in one repo each get their own box, and that box goes down when its agent exits instead
-of waiting out the idle limit (not while you peek at it or an `omabox run` is still going). `omabox ls`
-shows the names; to `peek` at or `shot` an agent's box from your terminal, pass `-b` with its name.
+of waiting out the idle limit (not while you peek at it or an `omabox run` is still going; a
+`run -d` job does not count). `omabox ls` shows the names; to `peek` at or `shot` an agent's box
+from your terminal, pass `-b` with its name.
 An agent no longer picks up a box you started yourself (`myrepo`) by default; it needs `-b myrepo`.
 `OMABOX_SESSION=` (empty) turns this off.
 Use `-b NAME` or `OMABOX=NAME` to run several or to share one on purpose, and `--size 3440x1440` for another screen size
@@ -378,7 +379,7 @@ project and moves on its own, so it may do more, or differently, by now: check i
   (apps start as plain processes, not units); their output lands in the box's `home/apps.log`.
   Logging out of the box ends it.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
-  `--idle 0` (or a longer one).
+  `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
 
 ## Contributing
 

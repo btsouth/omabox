@@ -330,17 +330,21 @@ t_agent_session() {
   # shellcheck disable=SC2329 # called through until_ok
   gone() { [ "$(state_of "$1")" = gone ]; }
   local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
-  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006
+  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006 s7=11111111-2222-4333-8444-5555aaaa0007 b7=$P-ag-aaaa0007
   local s8=11111111-2222-4333-8444-5555aaaa0008 b8=$P-ag-aaaa0008 s9=11111111-2222-4333-8444-5555aaaa0009
   local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
+  # shellcheck disable=SC2329 # called through until_ok
+  polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
   agent $s1 & local a1=$!
   agent $s2 --idle 45m & local a2=$!
-  check "both sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2"
+  agent $s7 --idle 0 & local a7=$!
+  check "the sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2" -a -e "$TMP/ag-$a7"
   check_eq "session 1 has its box" up "$(state_of "$b1")"
   check_eq "session 2 has its own" up "$(state_of "$b2")"
   check_eq "the box knows its agent" "$a1" "$(agent_of "$b1")"
   check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
+  check "--idle 0: a reaper still watches the agent, once a minute (not every 5 s)" until_ok 5 polls_every "$b7" 60
   check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
   as $s2 down >/dev/null 2>&1
   check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
@@ -350,7 +354,7 @@ t_agent_session() {
   check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
   (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" guard exec -- "$CLI" run -- true >/dev/null 2>&1)
   check_eq "...nor does an agent of that session take it over" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
-  ob down "$named" "$P-ag-abcd1234" "$b1" >/dev/null 2>&1; kill "$a1" "$a2" 2>/dev/null
+  ob down "$named" "$P-ag-abcd1234" "$b1" "$b7" >/dev/null 2>&1; kill "$a1" "$a2" "$a7" 2>/dev/null
   # Short idle limits, so the reaper polls every few seconds.
   agent $s3 --idle 30s & local a3=$!
   agent $s4 --idle 30s & local a4=$!
@@ -476,7 +480,7 @@ t_agent_session() {
   check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
     "up null" "$(state_of "$b11") $(agent_of "$b11")"
   ob down "$b11" >/dev/null 2>&1
-  kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
+  kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$a7" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
 }
 
 # `mode` writes box.json's size under the box's lock, as a takeover writes its agent (finding 93): a

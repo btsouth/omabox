@@ -1076,7 +1076,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     Where one box used to be reused, each session now starts its own (~500 MB), so a session's
     default box goes down after 30 min idle instead of 2 h (`--idle` and `OMABOX_IDLE` still set it);
     agents are told to `omabox down` when done, and this catches the ones that forget. Taking the box
-    down when its agent exits is left for a follow-up. (Done in finding 93, which puts the limit back to 2 h.) What follows from the id: Claude Code's
+    down when its agent exits is left for a follow-up (done in finding 93, which puts the limit back
+    to 2 h). What follows from the id: Claude Code's
     subagents run in its process with the same `CLAUDE_CODE_SESSION_ID`, so parallel subagents still
     share one box (each needs `-b NAME` for its own); `/clear` gives the session a new id, and
     `/resume` the resumed one's (`/compact` keeps it), so after `/clear` the agent starts a new box
@@ -1116,30 +1117,36 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     exited, under the outer one (found in review). It now keeps an `OMABOX_AGENT_PID` it runs under
     along with the session, and only then (a new session, or a pid it does not run under, gets its
     own). A box in use when its agent goes (a peek window, an `omabox run` still running) is not
-    taken down: the agent check comes after the activity check, and the box idles out once nobody
-    uses it. A box found dead keeps its logs until `down`, like any other dead box (findings 71,
-    74). With the agent tracked, a session's box has the 2 h idle limit again (finding 88 had cut it
-    to 30 min meanwhile). An agent in a pid namespace of its own (a sandbox) is not found; its box
-    only idles out. Interactive boxes and names given with `-b`/`OMABOX` are never tied to an agent.
-    The reaper polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute.
-    A session resumed in a new process (`claude --continue` or `--resume`, which keep the id) found
-    its box still up but recording the agent that had exited, and the reaper took it down under the
-    new one at its next check (11 s after the first quit, in review). Now a command that reaches a
-    session's box that is up (`up`, `run`, `path` and every one through `need_box`) records its own
-    agent there when the one recorded is gone; only then, not in a box that records none or whose
-    agent still runs. The write holds the box's lock, and the reaper's `down`, which decided on the
-    old agent, checks it again under that lock, so a takeover made while it waited keeps the box.
-    The takeover too checks again under that lock that the box records an agent and that it is gone:
-    an `up` of the name that found no agent may have come in between that `down` and it, and the box
-    that `up` started is not taken over (found in review). An agent whose first command comes after
-    that check finds the box gone, and so does one whose command waited for the lock while that
-    `down` had it: `run`, `path` and every command through `need_box` say no box is up (`run -d`
-    went on and failed with a bash error, its log's dir gone; found in review), and `up` starts a
-    new box, as it would for one that had died a moment earlier. `mode` writes box.json's size under
-    the box's lock too: its read and write around a takeover would put back the agent that exited
-    (found in review; `t_mode_lock` holds the lock and checks that `mode` waits for it).
-    `t_unit_agent_session` checks each way of finding the agent and the one-command case;
-    `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
+    taken down: the agent check comes after the activity check, so the box stays while in use and
+    goes at the next check (within a minute) once nobody uses it, without waiting out its idle
+    limit. A `run -d` job is not use (its `nsenter` exits at once, finding 39), so it does not keep
+    the box. A box found dead keeps its logs until `down`, like any other dead box (findings 71,
+    74). A session's box has the 2 h idle limit again, whether or not its agent is found (finding 88
+    had cut it to 30 min). An agent in a pid namespace of its own (a sandbox) is not found; its box
+    only idles out. Interactive boxes, other names given with `-b`, and every box while `OMABOX` is
+    set are never tied to an agent (`-b` with the session's own name is that box, and is tied). The
+    reaper polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute. With
+    `--idle 0` a session's box still goes with its agent (`ls` says never): the reaper runs for the
+    agent alone, every 60 s (it polled every 5 s, the floor for short limits, until review). Codex
+    is untested with a real Codex: only fake processes that set `CODEX_THREAD_ID` for their children
+    were checked. A session resumed in a new process (`claude --continue` or `--resume`, which keep
+    the id) found its box still up but recording the agent that had exited, and the reaper took it
+    down under the new one at its next check (11 s after the first quit, in review). Now a command
+    that reaches a session's box that is up (`up`, `run`, `path` and every one through `need_box`)
+    records its own agent there when the one recorded is gone; only then, not in a box that records
+    none or whose agent still runs. The write holds the box's lock, and the reaper's `down`, which
+    decided on the old agent, checks it again under that lock, so a takeover made while it waited
+    keeps the box. The takeover too checks again under that lock that the box records an agent and
+    that it is gone: an `up` of the name that found no agent may have come in between that `down`
+    and it, and the box that `up` started is not taken over (found in review). An agent whose first
+    command comes after that check finds the box gone, and so does one whose command waited for the
+    lock while that `down` had it: `run`, `path` and every command through `need_box` say no box is
+    up (`run -d` went on and failed with a bash error, its log's dir gone; found in review), and
+    `up` starts a new box, as it would for one that had died a moment earlier. `mode` writes
+    box.json's size under the box's lock too: its read and write around a takeover would put back
+    the agent that exited (found in review; `t_mode_lock` holds the lock and checks that `mode`
+    waits for it). `t_unit_agent_session` checks each way of finding the agent and the one-command
+    case; `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
     `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an `omabox run` is going after
     the agent is killed, goes once that ends, and a box that died stays dead; a new agent of the
     session whose first command is `run` or `up` keeps the box past two checks and takes it down
