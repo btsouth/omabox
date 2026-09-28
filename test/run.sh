@@ -224,7 +224,7 @@ t_unit_cli() {
   check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
-  check_match "run: a throwaway's up error is shown" "--net is host" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
+  check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
@@ -286,7 +286,7 @@ t_unit_uwsm_guard() {
   check_match "and says why" "not in a box" "$out"
 }
 
-# One box for most checks: host network, default size.
+# One box for most checks: connected network, default size.
 t_main() {
   local B=$P-main s0=$SECONDS
   check "up" ob up "$B" --env OMABOX_TEST=yes

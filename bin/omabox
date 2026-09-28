@@ -621,7 +621,7 @@ refuse_dest() {
 cmd_up() {
   STOCK_BAR=0
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-}
+  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -680,8 +680,12 @@ cmd_up() {
   local confirm_from=flag
   [ -n "$ws" ] || ws=$(conf_get workspace)
   [ -n "$confirm" ] || { confirm=$(conf_get confirm-close); confirm_from=config; }
-  case $net in host|isolated) ;; *) die "up: --net is host (the default) or isolated" ;; esac
+  # host: connected's name from before every box had a network of its own (finding 89). A nested
+  # connected box (its host is a box) cannot have a connected pasta (a box has no /dev/net/tun), so
+  # its network is none: an empty namespace of its own.
+  case $net in host|connected) net=connected ;; isolated) ;; *) die "up: --net is connected (the default) or isolated" ;; esac
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
+  [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
   check_install
   # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
@@ -787,7 +791,7 @@ cmd_up() {
   # file (pasta forwards the stub's port); an isolated box has no network to resolve names for.
   # (A link whose directory is missing makes readlink -f fail: no file to bind, not a silent exit.)
   local resolv; resolv=$(readlink -f /etc/resolv.conf) || resolv=""
-  if [ "$net" = host ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
+  if [ "$net" = connected ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
   for p in "${PLUGINS[@]}"; do args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}"); done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
@@ -813,9 +817,12 @@ cmd_up() {
   # keeps the internet, the LAN and host localhost (ports bound on either side are forwarded); an
   # isolated box has only a loopback and the --allow ports. pasta maps us to root, bwrap maps back to
   # our uid. pasta closes inherited fds: bwrap's info fd is opened inside it.
-  if [ "$net" = host ] && [ -f /opt/omabox/share/session.sh ]; then
-    # Nested boxes cannot create pasta's extra user namespace. Their stand-in host is already
-    # a box, so give the inner box its own network namespace without an external route.
+  if [ "$net" = none ]; then
+    # A nested connected box: its pasta would need /dev/net/tun, which the outer box's /dev lacks.
+    # It fails closed: a network namespace of its own with only a loopback. (A nested isolated box
+    # still runs pasta --splice-only, below: that needs no tun. Only a headless one started from
+    # omabox run, though: what the box's session starts (an interactive box's launch.sh included)
+    # has no_new_privs, and there bwrap cannot write its uid map, finding 89.)
     launch+=(--unshare-net)
   else
     local pasta_args=(-q -P "$D/pasta.pid")
