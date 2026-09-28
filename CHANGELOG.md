@@ -21,7 +21,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   opened a tab and could take focus. `BROWSER` and `GH_BROWSER` point at a stand-in that fails with a
   note, and Claude Code and `guard exec` put it first on PATH as `xdg-open`. Under Codex only `gh`
   and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
-  handler. After updating, `install.sh` offers to update the guard (`omabox guard on` does it too).
+  handler. After updating, `install.sh` offers to update the guard for the agents that have it
+  (`omabox guard on` does it too).
 
 ## 0.1.2 — 2026-09-26
 

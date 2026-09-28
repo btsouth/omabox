@@ -1115,16 +1115,17 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     The guard's settings now hold the checkout's path, so `guard on` refuses a path with characters
     that would need quoting in a settings file (`guard exec` exports it, which takes any path). An
     update that changes the guard makes it read "outdated", and `install.sh` then asks "Update it?"
-    rather than "Turn it on?" (a "no" to turning it on does not hold an update back). If the
-    checkout a hook names is gone (a removed worktree), its PATH entry quietly stops working and
-    `xdg-open` reaches the desktop again: `omabox guard` says so for that agent. Not covered, and no variable reaches them: Python's
-    `webbrowser` tries the next browser when one fails (under the guard its order was the stand-in,
-    `xdg-open`, `gio`, `chromium`); npm's `open` runs the copy of xdg-open it ships; a browser
-    started directly with a URL (Arch's `chromium` launcher takes flags from a file only); and
-    `omarchy-launch-browser` / `omarchy-launch-webapp`, which go through `uwsm-app` and the user
-    manager, as the guard's other gaps do. Per-browser wrappers were considered and left out: a fake
-    `chromium` would break `chromium --headless`, which agents use on purpose, the list of names
-    never ends, and Codex would not get them.
+    for the agents that have it, whatever the others' state, and "Turn it on?" only for those where
+    it is off (a "no" to turning it on does not hold an update back, and a "no" to an update is not
+    remembered). If the checkout a hook names is gone (a removed worktree), its PATH entry quietly
+    stops working and `xdg-open` reaches the desktop again: `omabox guard` says so for that agent.
+    Not covered, and no variable reaches them: Python's `webbrowser` tries the next browser when one
+    fails (under the guard its order was the stand-in, `xdg-open`, `gio`, `chromium`); npm's `open`
+    runs the copy of xdg-open it ships; a browser started directly with a URL (Arch's `chromium`
+    launcher takes flags from a file only); and `omarchy-launch-browser` / `omarchy-launch-webapp`,
+    which go through `uwsm-app` and the user manager, as the guard's other gaps do. Per-browser
+    wrappers were considered and left out: a fake `chromium` would break `chromium --headless`,
+    which agents use on purpose, the list of names never ends, and Codex would not get them.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

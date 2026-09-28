@@ -746,8 +746,36 @@ t_unit_install() {
   jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]}}' > "$h/.claude/settings.json"
   date -Is > "$h/.config/omabox/guard-declined"
   out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
-  check_match "an outdated guard: install.sh offers to update it" "older omabox.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
+  check_match "an outdated guard: install.sh offers to update it" "guard there is outdated.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
   check_eq "...and changes nothing without a terminal" "echo old omabox-guard" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$h/.claude/settings.json")"
+  # One from a checkout that is gone reads outdated too, though no older omabox wrote it.
+  local old; old=$(cat "$h/.claude/settings.json")
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[0].hooks[0].command = $c' \
+    <<<"$old" > "$h/.claude/settings.json"
+  check_match "...and one from a checkout that is gone, in words that fit it too" \
+    "/nonexistent/co/share/guard is gone.*The guard there is outdated.*not asked \(no terminal\): omabox guard on claude" \
+    "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1 | tr '\n' ' ')"
+  printf '%s\n' "$old" > "$h/.claude/settings.json"
+  # ...for the agents that have it, whatever the others' guard (Codex off here) and an earlier "no".
+  # "Turn it on?" is for the others, and only a "no" to that is remembered.
+  local guard=(env HOME="$h" "$CLI" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$ROOT/install.sh")" /dev/null)
+  mkdir -p "$h/.codex"; rm "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "Claude Code outdated, Codex off: an update for Claude Code, turning it on for Codex" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*not asked \(no terminal\): omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "...the update even after a no to turning it on" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*you said no before.*: omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  printf 'y\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...in a terminal, yes updates Claude Code's and leaves Codex off" "Claude Code .*: on Codex .*: off" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  rm "$h/.config/omabox/guard-declined"; printf '%s\n' "$old" > "$h/.claude/settings.json"
+  printf 'n\ny\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...no to the update and yes to turning it on: only Codex's changes" "Claude Code .*: outdated Codex .*: on" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  check_fails "...and the no to the update is not remembered" test -e "$h/.config/omabox/guard-declined"
+  rm -rf "$h/.codex"
   rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
