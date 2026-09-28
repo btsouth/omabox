@@ -815,8 +815,11 @@ t_throwaway_dead() {
   until_ok 30 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-td-run\")) | select(.state == \"up\")'"
   local n; n=$(ob ls --json | jq -r ".[] | select(.name | startswith(\"$P-td-run\")) | .name")
   until_ok 30 pgrep -f "omabox _reap $n "   # up has finished
-  local pid; pid=$(jq -r '."child-pid"' "$XDG_RUNTIME_DIR/omabox/$n/info.json")
-  kill -KILL "$r" "$pid"
+  # The box's PID 1 as the CLI finds it: behind pasta, info.json's child-pid is pasta's numbering (2,
+  # which on the host is kthreadd), and the box would stay up for the reaper's "run is gone" branch.
+  local pid; pid=$(D=$XDG_RUNTIME_DIR/omabox/$n lib box_pid)
+  kill -KILL "$r"
+  check "its box is killed before the reaper sees it" kill -KILL "$pid"
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
 }
 
