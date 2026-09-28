@@ -276,8 +276,9 @@ t_agent_session() {
   ob down "$b1" "$b3" >/dev/null 2>&1
 }
 
-# finding 90: when an interactive box gives no frame, `shot` never says to show its window, and for a
-# box started before drawn_hidden it says to ask the user (a restart ends their session in it).
+# finding 90: when an interactive box gives no frame, `shot` never says to show its window but to ask
+# the user, and for a box started before drawn_hidden, or whose window confirm-close replaced, that it
+# needs a restart (which ends their session in it).
 t_unit_shot_hidden() {
   local d=$TMP/boxes/oldbox out
   mkdir -p "$d"
@@ -289,8 +290,13 @@ t_unit_shot_hidden() {
   echo '{"mode": "interactive", "workspace": "9", "drawn_hidden": true}' > "$d/box.json"
   out=$(shot_msg)
   check_match "a new one: never switch the user's workspace for a frame" "never switch the user's workspace or focus" "$out"
+  check_match "...ask the user" "ask the user" "$out"
   check_fails "...and no restart" grep -q restart <<<"$out"
   check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
+  mkdir -p "$d/run" && echo 1 > "$d/run/omabox.reopened"
+  out=$(shot_msg)
+  check_match "a window confirm-close reopened: not drawn while hidden, ask the user" "confirm-close.*not drawn while hidden.*ask the user" "$out"
+  check_match "...never switch the user's workspace for a frame" "Never switch the user's workspace or focus" "$out"
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
@@ -1033,6 +1039,8 @@ t_guard() {
   "${cl[@]}" >/dev/null; sleep 2
   check_eq "confirm-close: the box stays after a close" up "$(state cc)"
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
+  check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
   "${cl[@]}" >/dev/null
   check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
   "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1

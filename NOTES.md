@@ -1104,18 +1104,30 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     after `set_prop` alone, 15 after a tag toggle; an old-style rule stayed at 0 through a tag
     toggle, a workspace move and a reload. A restart ends the user's session in the box, so
     `shot`'s message for such a box says to ask the user rather than to restart it. `up` records
-    `drawn_hidden` in box.json to tell those apart; neither message suggests showing the window,
-    both say not to. The skill says the same under `omabox host`, and that a box the user started
-    has its own name (the repo's, finding 88, or box-N from the bar widget): an agent passes
-    `-b NAME` to reach it. The cost: a hidden interactive box running something animated now keeps
-    drawing at 15 fps where it used to stop, and interactive boxes never idle out.
+    `drawn_hidden` in box.json to tell those apart; no message suggests showing the window, each
+    says not to. The skill says the same under `omabox host`, and that a box the user started has
+    its own name (the repo's, finding 88, or box-N from the bar widget): an agent passes `-b NAME`
+    to reach it. The cost: a hidden interactive box running something animated now keeps drawing at
+    15 fps where it used to stop, and interactive boxes never idle out. The exception is a box kept
+    running after a close with confirm-close on (finding 70): the exec rule went with the first
+    window, so the new one is not drawn while hidden (Open). `click` and `keys` still reach it, as
+    input never waits for a frame, but `shot` gets no frame, so an agent cannot see what they did.
+    In a stand-in (`--no-shell`, a terminal in the box), with the new window hidden and `shot`
+    failing, `keys super+1` switched the box to the terminal's workspace, and a click and typed
+    keys then reached the terminal: it got the mouse report and ran the command. Right after the
+    keep, though, the box's new output showed a new, empty workspace (3; the terminal stayed on 1
+    and nothing had focus), hidden or shown, so a blind click or keys reached no app until the
+    box's workspace was switched. confirm-close.sh leaves `omabox.reopened` in the box's runtime
+    dir, and `shot`'s message then says the box needs a restart and to ask the user; for any other
+    interactive box with no frame it says to ask the user too.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
     workspaces 9 and 3 and the scratchpad, and the one on 9 again once a window has opened in it,
     which that second shot must show (the first shot right after `up` gets a frame even from a box
     that is not drawn while hidden); the stand-in's workspace and focused window stay unchanged.
-    `t_unit_shot_hidden` checks the messages, for a box with and without `drawn_hidden`. Not yet
+    `t_unit_shot_hidden` checks the messages, for a box with and without `drawn_hidden` and with
+    `omabox.reopened`, and `t_guard` that a close with confirm-close on leaves that file. Not yet
     checked on the real desktop.
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
@@ -1146,3 +1158,7 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
   user setups remain open.
+- The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
+  `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
+  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.
+- After a confirm-close keep (finding 70), the new window shows a new, empty workspace (finding 90).

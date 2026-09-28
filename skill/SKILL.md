@@ -118,7 +118,8 @@ config after an edit, see the change on my screen), run that one command with `o
 (e.g. `omabox host -- hyprctl reload`, `omabox host -- omarchy-theme-set NAME`). Only then: it is
 the one way past the guard, and it is on the record. Testing, screenshots and anything the user did
 not ask to see on their desktop stay in a box. Never use it to switch the user's workspace or focus
-so you can see a box: `shot` works on a hidden interactive box.
+so you can see a box: `shot` works on a hidden interactive box, and when `shot` gets no frame, ask
+the user (see Showing the user).
 
 ## Omarchy shell plugins
 
@@ -179,11 +180,14 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   taking focus. Only when the user asks to watch; it does not affect the box.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives (SUPER+ALT+ESCAPE
   sends SUPER keys to it). Only when the user asks for it. `shot`, `click` and `keys` work on it while
-  its window is hidden; never bring that window forward yourself. A box the user started has its own
-  name (the repo's, or box-N from the bar widget), not your session's: pass `-b NAME` to `shot`,
-  `click` or `keys` it (`omabox ls` shows it). When the user has to act in it (a login), tell them
-  which workspace it is on and let them go there. `omabox config` holds the user's
-  settings: change them only when the user asks.
+  its window is hidden. Once the user closed that window and kept the box running, the new one is
+  drawn only while shown: `click` and `keys` still reach it, but `shot` gets no frame, so you cannot
+  see what they did, and the new window can open on an empty workspace, where they reach no app.
+  Never bring that window forward yourself: when `shot` gets no frame, ask the user. A box the user
+  started has its own name (the repo's, or box-N from the bar widget), not your session's: pass
+  `-b NAME` to `shot`, `click` or `keys` it (`omabox ls` shows it). When the user has to act in it
+  (a login), tell them which workspace it is on and let them go there.
+  `omabox config` holds the user's settings: change them only when the user asks.
 
 ## When a box cannot test it: real hardware and the real session
 
