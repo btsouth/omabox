@@ -8,7 +8,8 @@
 #
 # Never touches the real desktop: every box is headless, and the last test checks that the host's
 # focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
-# and the host ports 8093/8094 free (a throwaway HTTP server for the network tests).
+# and the host ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds
+# free ports of its own).
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -20,11 +21,13 @@ CLI=$ROOT/bin/omabox
 P=t$$                      # box name prefix
 TMP=$(mktemp -d)
 pass=0 fail=0 failed=()
+SERVERS=()                 # host-side test servers, stopped on exit
 
 cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+  [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -437,28 +440,62 @@ t_isolated() {
   kill "$other" 2>/dev/null
 }
 
-# A connected box must not claim the host's abstract X11 :0 socket. It still needs ordinary
-# network access in both directions for app previews and local test servers.
-t_connected_x11() {
-  local B=$P-x11 host_screen box_screen srv
-  host_screen=$("$CLI" host -- xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')
-  check_match "host X11 screen available" '^[0-9]+ x [0-9]+$' "$host_screen"
-  check "connected box with Xwayland starts" ob up "$B" --no-shell --xwayland --size 1600x900
-  check_fails "connected box has a separate network namespace" \
-    test "$(readlink "/proc/$(cat "$(ob path -b "$B")/pid")/ns/net")" = "$(readlink /proc/self/ns/net)"
-  box_screen=$(ob run -b "$B" -- env DISPLAY=:0 xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')
-  check_eq "labwc X11 stays inside the box" '1600 x 900' "$box_screen"
-  check_eq "host X11 still sees its own screen" "$host_screen" \
-    "$("$CLI" host -- xrandr -q 2>/dev/null | sed -n 's/^Screen 0:.*current \([0-9]* x [0-9]*\).*/\1/p')"
-  mkdir -p "$TMP/www" && echo connected > "$TMP/www/index.html"
-  # Its own variable: HTTP_PID is t_isolated's server, which the EXIT trap still has to stop.
-  python3 -m http.server 8095 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & srv=$!
-  check_eq "connected box reaches host localhost" connected \
-    "$(ob run -b "$B" -- curl -fsS --retry 3 --retry-connrefused --max-time 3 http://127.0.0.1:8095/)"
-  ob run -b "$B" -d -- python3 -m http.server 8096 --bind 127.0.0.1 >/dev/null
-  check "host reaches connected box localhost" until_ok 5 curl -fsS --max-time 2 http://127.0.0.1:8096/
+# A port below the ephemeral range that nothing on the host listens on, TCP or UDP (pasta forwards
+# both), so the server that answers is the test's own.
+free_port() {
+  local p
+  while p=$((20000 + RANDOM % 12000)); ss -Htuln "sport = :$p" | grep -q .; do :; done
+  echo "$p"
+}
+
+# The host's abstract X11 sockets that are new since BEFORE and not known to belong to a process
+# outside pid namespace NS: a box another checkout starts meanwhile holds its own, but a socket
+# whose owner cannot be read counts. new_x11 BEFORE NS
+new_x11() {
+  local n pid ns
+  for n in $(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u | LC_ALL=C comm -13 <(echo "$1") -); do
+    pid=$(ss -xlpH | awk -v n="$n" '$5 == n' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+    ns=$(readlink "/proc/${pid:-0}/ns/pid" 2>/dev/null) && [ "$ns" != "$2" ] && continue
+    echo "$n"
+  done
+}
+
+# finding 89: a box's labwc binds the abstract @/tmp/.X11-unix/X0 (its lazy Xwayland) when it starts.
+# In the host's network namespace that was the host's :0 (or the next free one), and host X11 apps
+# opened in the box. A connected box still reaches the internet and host loopback, and the host its
+# servers. Read-only on the host: no X client, and ports nobody listens on.
+t_connected() {
+  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out ns port tok hport htok
+  before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
+  # (No box, nothing to check; and no stray dir from writing into its HOME.)
+  if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
+  else no "up (--net host: connected's old name)" "$out"; return; fi
+  check_match "ls shows it connected" "$B +headless .* up +connected " "$(ob ls)"
+  check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
+  # Not the fix itself (on main the box's /proc/net/unix is the host's, and this passes too): labwc
+  # did bind one, so the check above had something to find.
+  check "labwc's abstract X11 socket is there, seen from the box" ob run -b "$B" -- grep -qE '@/tmp/\.X11-unix/X0$' /proc/net/unix
+  ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
+  if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
+  else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
+  if getent ahosts archlinux.org >/dev/null 2>&1; then
+    check "DNS resolves in the box" ob run -b "$B" -- getent ahosts archlinux.org
+  else echo "       (the host resolves no names: DNS not checked)"; fi
+  # host -> box as 127.0.0.1; forwards take up to about a second to appear.
+  port=$(free_port) tok=box-$P-$RANDOM
+  mkdir -p "$D/home/www" && echo "$tok" > "$D/home/www/index.html"
+  ob run -b "$B" -d -- python3 -m http.server "$port" --bind 127.0.0.1 --directory /home/sbx/www >/dev/null
+  check "the host reaches a box server on 127.0.0.1" until_ok 10 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$port/ | grep -qx '$tok'"
+  # box -> host as 127.0.0.1 (localhost from the box resets on an IPv4-only host server: NOTES 89)
+  hport=$(free_port) htok=host-$P-$RANDOM
+  mkdir -p "$TMP/conn" && echo "$htok" > "$TMP/conn/index.html"
+  python3 -m http.server "$hport" --bind 127.0.0.1 --directory "$TMP/conn" >/dev/null 2>&1 & SERVERS+=($!)
+  check_eq "the box reaches a host server on 127.0.0.1" "$htok" \
+    "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$hport/")"
+  # Stopped now, and dropped from SERVERS (cleanup's, for a suite stopped midway): by the end of the
+  # suite their pids may be another process's.
+  kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
   check "down" ob down "$B"
-  kill "$srv" 2>/dev/null
 }
 
 t_idle() {
@@ -1045,7 +1082,7 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected_x11 t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
