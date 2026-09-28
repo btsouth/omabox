@@ -1025,8 +1025,10 @@ t_guard() {
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
   # finding 92: the guard's xdg-open stays out of a box (this repo is mounted in it, so it could be seen).
   check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
-  check_fails "...and the box session's PATH lacks the guard's" "$CLI" run -b "$B" -- \
-    sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH=" | grep -q share/guard'
+  # (Its PATH line first: a failed read would have no share/guard in it either.)
+  local spath; spath=$("$CLI" run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH="')
+  check_match "...and the box session's PATH" '^PATH=/' "$spath"
+  check_fails "...lacks the guard's" grep share/guard <<<"$spath"
   # Inside the stand-in host: the guard as an agent's shell there would have it.
   local in=("$CLI" run -b "$B" -- "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.
