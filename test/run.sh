@@ -258,11 +258,19 @@ t_unit_agent_session() {
   check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   sleep 30 & local other=$!
   check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
-  kill "$other" 2>/dev/null
   out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
   check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
   check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # A guard exec inside a guarded agent keeps its session, so its agent too (the box is the outer
+  # one's), unless it does not run under that agent; a session of its own starts with its own agent.
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; "$0" guard exec -- sh -c '\''echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "guard exec in a guarded agent: the agent is still the outer one" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(OMABOX_SESSION=abcd1234 OMABOX_AGENT_PID=$other "$CLI" guard exec -- sh -c 'echo "me=$$"; echo "me=$OMABOX_AGENT_PID"')
+  check_eq "...not an OMABOX_AGENT_PID it does not run under" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(bash -c 'OMABOX_AGENT_PID=$$ "$0" guard exec -- sh -c '\''echo "me=$$"; echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "...and not one from outside a session it starts" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  kill "$other" 2>/dev/null
   check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
     env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
 }

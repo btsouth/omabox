@@ -190,13 +190,16 @@ agent_proc() {
         pid=$(proc_ppid "$pid") || return 1
       done ;;
   esac
-  [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ -r "/proc/$pid/environ" ] || return 1
+  [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ -r "/proc/$pid/environ" ] && descends_from "$pid" || return 1
+  echo "$pid $(proc_start "$pid")"
+}
+# Whether this process is PID or runs under it.
+descends_from() {
   local p=$$
-  until [ "$p" = "$pid" ]; do
+  until [ "$p" = "$1" ]; do
     [ "$p" -gt 1 ] || return 1
     p=$(proc_ppid "$p") || return 1
   done
-  echo "$pid $(proc_start "$pid")"
 }
 # Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses).
 proc_stat() { local s f; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; read -ra f <<<"${s##*) }"; echo "${f[$2]}"; }
@@ -1631,9 +1634,16 @@ cmd_guard() {
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
       export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
-      if [ -z "${OMABOX_SESSION+x}" ]; then OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION; fi
-      # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93).
-      export OMABOX_AGENT_PID=$$
+      # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93). A session
+      # it keeps keeps its agent too, while this runs under that one: a guard exec inside a guarded
+      # agent shares the outer one's box, which must not go when the inner one exits.
+      if [ -z "${OMABOX_SESSION+x}" ]; then
+        OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION
+        OMABOX_AGENT_PID=$$
+      elif ! [[ ${OMABOX_AGENT_PID:-} =~ ^[0-9]+$ ]] || ! descends_from "$OMABOX_AGENT_PID"; then
+        OMABOX_AGENT_PID=$$
+      fi
+      export OMABOX_AGENT_PID
       exec "$@" ;;
     ""|on|off) ;;
     *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
