@@ -187,9 +187,9 @@ select_box() {
 # died and the pid was reused, it is some other process of the user's, which `down` must not SIGKILL
 # and `run` must not enter.
 box_pid() {
-  local pid
+  local pid=""
   if [ -f "$D/pasta.pid" ]; then
-    pid=$(cat "$D/pid" 2>/dev/null) || { pasta_pid && pid=$(cat "$D/pid" 2>/dev/null); } || true
+    pasta_pid && pid=$(cat "$D/pid" 2>/dev/null) || true
   else
     pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
   fi
@@ -200,14 +200,28 @@ box_pid() {
   [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
   echo "$pid"
 }
+# Records the box's host pid in $D/pid, unless it is there already (box_pid then checks it is still the
+# box's). Only through this box's own pasta: pasta never removes its pid file, and every box's PID 1 is
+# pid 2 in its pasta's namespace, so a pasta.pid whose pid now belongs to another box's pasta would
+# lead to that box's PID 1, which `down` would then SIGKILL.
 pasta_pid() {
   local inner pasta bw p
+  [ -s "$D/pid" ] && return 0
   inner=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) && [ -n "$inner" ] || return 1
-  pasta=$(cat "$D/pasta.pid" 2>/dev/null) && bw=$(pgrep -P "$pasta" | head -1) || return 1
+  pasta=$(box_pasta) && bw=$(pgrep -P "$pasta" | head -1) || return 1
   for p in $(pgrep -P "$bw"); do   # pasta -> bwrap -> the box's PID 1, whose pid in pasta's ns is $inner
     [ "$(awk '/^NSpid:/ {print $3}' "/proc/$p/status" 2>/dev/null)" = "$inner" ] && { echo "$p" > "$D/pid"; return 0; }
   done
   return 1
+}
+# The pid in pasta.pid while it is still this box's pasta, or a failure: a pasta (its comm: pasta re-execs
+# itself as passt.avx2 on most CPUs, and is non-dumpable, but comm stays readable) whose command line
+# names this pid file. Neither alone: a copy of sleep can be called pasta, and any argv can hold a path.
+box_pasta() {
+  local pasta; pasta=$(cat "$D/pasta.pid" 2>/dev/null) && [ -n "$pasta" ] || return 1
+  case $(cat "/proc/$pasta/comm" 2>/dev/null) in pasta|pasta.*|passt|passt.*) ;; *) return 1 ;; esac
+  (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- " -P $D/pasta.pid " || return 1
+  echo "$pasta"
 }
 box_alive() { local pid; pid=$(box_pid) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
@@ -840,10 +854,12 @@ cmd_up() {
         -t "127.0.0.1/$ports" -u "127.0.0.1/$ports" -T "$ports" -U "$ports")
     fi
     # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
-    # pasta_pid to find the box's.
+    # pasta_pid to find the box's. It is bwrap's parent: --die-with-parent ends the box with it (OOM, a
+    # killall), rather than leave it up with no network, DNS or forwards for the rest of its life.
     # shellcheck disable=SC2016 # $0 and $@ belong to the inner sh
     launch=(pasta "${pasta_args[@]}" --
-      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)")
+      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)"
+      --die-with-parent)
   fi
   # --systemd: the whole box (including pasta when used) runs in a transient scope that delegates
   # its cgroup, the only way an unprivileged sandbox gets a cgroup subtree of its own to manage. The
@@ -855,8 +871,8 @@ cmd_up() {
       bash -c 'cg=/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup); exec "${@//@CGROUP@/$cg}"' omabox-cgroup "${launch[@]}")
     sdenv=(XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR")   # systemd-run finds the user manager through it
   fi
-  # No --die-with-parent: the box outlives this command; `omabox down` (or closing an
-  # interactive box's window) ends it.
+  # Without pasta, no --die-with-parent: bwrap's parent is then this command, which the box outlives;
+  # `omabox down` (or closing an interactive box's window) ends it.
   # env -i keeps Hyprland's exec-rule token (finding 45): the host matches a new window to its exec
   # rule by the launched pid or by this token in the client's environment, and pasta forks, so an
   # isolated box's window only lands on its workspace through the token. bwrap drops it inside.
@@ -932,12 +948,11 @@ lua_str() {
 kill_box() {
   local pid pasta
   pid=$(box_pid) || true
-  pasta=$(cat "$D/pasta.pid" 2>/dev/null) || true
   [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
   # A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
   [ -n "$pid" ] && pkill -CONT -f "^nsenter -t $pid " 2>/dev/null
   # A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
-  if [ -n "$pasta" ] && (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- "-P $D/pasta.pid"; then
+  if pasta=$(box_pasta); then
     kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null
   fi
   local end=$((SECONDS + 10))

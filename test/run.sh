@@ -639,8 +639,10 @@ t_race() {
   ob up "$B" --no-shell >/dev/null 2>&1 & local a=$!
   ob up "$B" --no-shell >/dev/null 2>&1 & local b=$!
   wait $a; wait $b
-  # pasta and bwrap hold three process entries: pasta, bwrap's monitor and the box's PID 1.
-  check_eq "one box" 3 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  # One bwrap is two processes (its monitor, and the box's PID 1), under one pasta. Anchored: pasta's
+  # own command line holds bwrap's too.
+  check_eq "one box" 2 "$(pgrep -fc "^bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  check_eq "...behind one pasta" 1 "$(pgrep -fc "^pasta .* -P $XDG_RUNTIME_DIR/omabox/$B/pasta\.pid " || true)"
   check "down" ob down "$B"
   sleep 0.5
   check_eq "nothing of it left running" 0 "$(pgrep -fc "$XDG_RUNTIME_DIR/omabox/$B/" || true)"
@@ -677,6 +679,15 @@ t_hyprland_dies() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# A box whose pasta died (OOM, a killall) ends with it rather than stay up with no network (finding 89).
+t_pasta_dies() {
+  local B=$P-pdie
+  check "up" ob up "$B" --no-shell
+  kill -KILL "$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")"
+  check "the box ends with its pasta" until_ok 10 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"dead\")'"
+  check "down" ob down "$B"
+}
+
 # --no-shell is a bare compositor.
 t_no_shell() {
   local B=$P-bare
@@ -706,6 +717,29 @@ t_stale_pid() {
   ob down "$B" >/dev/null 2>&1
   check "down did not kill the process that has its pid now" kill -0 "$victim"
   kill "$victim" 2>/dev/null
+  # Nor a pasta.pid whose pid is now another process named pasta: pasta never removes its pid file,
+  # and a name alone proves nothing (finding 89): box_pasta also wants the command line to name the
+  # pid file.
+  cp /usr/bin/sleep "$TMP/pasta"
+  "$TMP/pasta" 300 & local fake=$!
+  mkdir -p "$D"
+  echo '{"child-pid": 2}' > "$D/info.json"
+  echo '{"name": "x", "mode": "headless", "net": "connected"}' > "$D/box.json"
+  echo "$fake" > "$D/pasta.pid"
+  check_eq "a stale pasta.pid reads dead" dead "$(ob ls --json | jq -r ".[] | select(.name == \"$B\") | .state")"
+  ob down "$B" >/dev/null 2>&1
+  check "down did not kill another process named pasta" kill -0 "$fake"
+  kill "$fake" 2>/dev/null
+  # Nor one whose command line names the pid file as pasta's does, but which is not pasta (its comm).
+  bash -c 'sleep 300 & wait' decoy -P "$D/pasta.pid" x & local decoy=$!
+  until_ok 5 grep -qF decoy "/proc/$decoy/cmdline"
+  mkdir -p "$D"
+  echo '{"child-pid": 2}' > "$D/info.json"
+  echo '{"name": "x", "mode": "headless", "net": "connected"}' > "$D/box.json"
+  echo "$decoy" > "$D/pasta.pid"
+  ob down "$B" >/dev/null 2>&1
+  check "down did not kill a process that only names the pid file" kill -0 "$decoy"
+  pkill -P "$decoy"; kill "$decoy" 2>/dev/null
 }
 
 # An isolated box whose host pid file is missing is still taken down (finding 63).
@@ -1122,7 +1156,7 @@ t_guard() {
 
 UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
 BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
