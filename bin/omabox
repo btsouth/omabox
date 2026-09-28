@@ -829,7 +829,15 @@ cmd_up() {
     if [ "$net" = isolated ]; then
       pasta_args+=(--splice-only -t none -u none -U none -T "${allow:-none}")
     else
-      pasta_args+=(--config-net --host-lo-to-ns-lo -t auto -u auto -T auto -U auto)
+      # Box ports reach the host on its 127.0.0.1 only: plain `-t auto` binds *:P, which opens them to
+      # the LAN, and a host client of `localhost` tries ::1 first, which pasta accepts, then resets,
+      # instead of refusing (no fallback to 127.0.0.1). 1-65535,auto: ephemeral ports too, which auto
+      # alone skips. --no-map-gw: the gateway is the router again, not all of the host's loopback.
+      # -D/-S none: DNS is the host's resolv.conf (its stub's port comes in through -T), so pasta
+      # has none to hand out and no warning to print about it.
+      local ports=1-65535,auto
+      pasta_args+=(--config-net --no-map-gw -D none -S none --host-lo-to-ns-lo
+        -t "127.0.0.1/$ports" -u "127.0.0.1/$ports" -T "$ports" -U "$ports")
     fi
     # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
     # pasta_pid to find the box's.

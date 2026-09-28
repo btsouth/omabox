@@ -9,7 +9,7 @@
 # Never touches the real desktop: every box is headless, and the last test checks that the host's
 # focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
 # and the host ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds
-# free ports of its own).
+# free ports of its own, and makes one connection from a box to its gateway, the router).
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -448,6 +448,14 @@ free_port() {
   echo "$p"
 }
 
+# An HTTP server on a port the kernel picks (bind port 0: the ephemeral range, which pasta's auto
+# alone does not forward), which writes that port to FILE once it listens. python3 -c "$PORT0" DIR FILE
+PORT0='import functools, http.server, os, sys
+d, f = sys.argv[1:3]
+s = http.server.HTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d))
+open(f + ".tmp", "w").write(str(s.server_port)); os.rename(f + ".tmp", f)
+s.serve_forever()'
+
 # The host's abstract X11 sockets that are new since BEFORE and not known to belong to a process
 # outside pid namespace NS: a box another checkout starts meanwhile holds its own, but a socket
 # whose owner cannot be read counts. new_x11 BEFORE NS
@@ -463,14 +471,18 @@ new_x11() {
 # finding 89: a box's labwc binds the abstract @/tmp/.X11-unix/X0 (its lazy Xwayland) when it starts.
 # In the host's network namespace that was the host's :0 (or the next free one), and host X11 apps
 # opened in the box. A connected box still reaches the internet and host loopback, and the host its
-# servers. Read-only on the host: no X client, and ports nobody listens on.
+# servers, on any port. Read-only on the host: no X client, and ports nobody listens on; from the box,
+# one connection to its gateway (the router).
 t_connected() {
-  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out ns port tok hport htok
+  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out ns port tok hport htok gw got
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
   # (No box, nothing to check; and no stray dir from writing into its HOME.)
   if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
   else no "up (--net host: connected's old name)" "$out"; return; fi
   check_match "ls shows it connected" "$B +headless .* up +connected " "$(ob ls)"
+  # -D none: with --no-map-gw pasta cannot hand the box a loopback nameserver (the host's 127.0.0.53),
+  # and would say so on every start.
+  check_eq "pasta printed no warning (box.log is empty)" "" "$(cat "$D/box.log" 2>&1)"
   check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
   # Not the fix itself (on main the box's /proc/net/unix is the host's, and this passes too): labwc
   # did bind one, so the check above had something to find.
@@ -481,17 +493,41 @@ t_connected() {
   if getent ahosts archlinux.org >/dev/null 2>&1; then
     check "DNS resolves in the box" ob run -b "$B" -- getent ahosts archlinux.org
   else echo "       (the host resolves no names: DNS not checked)"; fi
-  # host -> box as 127.0.0.1; forwards take up to about a second to appear.
+  # host -> box as localhost: the host tries ::1 first, which must be refused, not reset (pasta
+  # binds the host side on 127.0.0.1 only); forwards take up to about a second to appear.
   port=$(free_port) tok=box-$P-$RANDOM
   mkdir -p "$D/home/www" && echo "$tok" > "$D/home/www/index.html"
   ob run -b "$B" -d -- python3 -m http.server "$port" --bind 127.0.0.1 --directory /home/sbx/www >/dev/null
-  check "the host reaches a box server on 127.0.0.1" until_ok 10 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$port/ | grep -qx '$tok'"
+  check "the host reaches a box server as localhost" until_ok 10 bash -c "curl -fsS --max-time 2 http://localhost:$port/ | grep -qx '$tok'"
+  check_eq "...which is bound on the host's 127.0.0.1 only" "127.0.0.1:$port" "$(ss -Htuln "sport = :$port" | awk '{print $5}' | sort -u)"
+  # ...and on a port the kernel chose (1-65535,auto: auto alone skips the ephemeral range)
+  tok=box0-$P-$RANDOM
+  mkdir -p "$D/home/www0" && echo "$tok" > "$D/home/www0/index.html"
+  ob run -b "$B" -d -- python3 -c "$PORT0" /home/sbx/www0 /home/sbx/port0 >/dev/null
+  if until_ok 10 test -s "$D/home/port0"; then port=$(cat "$D/home/port0")
+    check "the host reaches a box server on a port the kernel chose" until_ok 10 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$port/ | grep -qx '$tok'"
+  else no "the host reaches a box server on a port the kernel chose" "the box server wrote no port"; fi
   # box -> host as 127.0.0.1 (localhost from the box resets on an IPv4-only host server: NOTES 89)
   hport=$(free_port) htok=host-$P-$RANDOM
   mkdir -p "$TMP/conn" && echo "$htok" > "$TMP/conn/index.html"
   python3 -m http.server "$hport" --bind 127.0.0.1 --directory "$TMP/conn" >/dev/null 2>&1 & SERVERS+=($!)
   check_eq "the box reaches a host server on 127.0.0.1" "$htok" \
     "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$hport/")"
+  tok=host0-$P-$RANDOM
+  mkdir -p "$TMP/conn0" && echo "$tok" > "$TMP/conn0/index.html"
+  python3 -c "$PORT0" "$TMP/conn0" "$TMP/conn0.port" >/dev/null 2>&1 & SERVERS+=($!)
+  if until_ok 10 test -s "$TMP/conn0.port"; then port=$(cat "$TMP/conn0.port")
+    check_eq "...and on a port the kernel chose" "$tok" \
+      "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$port/")"
+  else no "...and on a port the kernel chose" "the host server wrote no port"; fi
+  # --no-map-gw: the box's gateway is the router, not the host's loopback. One connection to it, on
+  # the host server's port: refused or timed out, but not that server.
+  gw=$(ob run -b "$B" -- ip -4 route show default | awk '$2 == "via" {print $3; exit}')
+  if [ -n "$gw" ]; then
+    got=$(ob run -b "$B" -- curl -s --max-time 2 "http://$gw:$hport/")
+    if [[ $got != *"$htok"* ]]; then ok "the box's gateway is not the host's loopback"
+    else no "the box's gateway is not the host's loopback" "$gw:$hport answered as the host server"; fi
+  else echo "       (the box has no default route: gateway not checked)"; fi
   # Stopped now, and dropped from SERVERS (cleanup's, for a suite stopped midway): by the end of the
   # suite their pids may be another process's.
   kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
