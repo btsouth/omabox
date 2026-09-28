@@ -359,9 +359,11 @@ t_agent_session() {
   agent $s3 --idle 30s & local a3=$!
   agent $s4 --idle 30s & local a4=$!
   until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
+  pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
   ob run -b "$b3" -- sleep 15 & local busy=$!
-  sleep 1; kill "$a3" 2>/dev/null
-  local pid4; pid4=$(bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$b4")
+  # The run is use once its nsenter is up; a check before that would find the box unused.
+  until_ok 10 pgrep -f "^nsenter -t $(pid_of "$b3") "; kill "$a3" 2>/dev/null
+  local pid4; pid4=$(pid_of "$b4")
   kill -KILL "$pid4" 2>/dev/null; kill "$a4" 2>/dev/null
   sleep 10
   check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
