@@ -58,6 +58,9 @@ mounted as a discarded overlay (writes succeed, vanish at teardown), and tears i
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
 box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
+Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
+the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
+second after they listen. --net isolated: a loopback and the --allow ports only.
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
