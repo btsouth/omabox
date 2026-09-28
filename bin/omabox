@@ -185,8 +185,10 @@ agent_proc() {
     CLAUDE_CODE_SESSION_ID) pid=${CLAUDE_PID:-} ;;
     OMABOX_SESSION) pid=${OMABOX_AGENT_PID:-} ;;
     CODEX_THREAD_ID)
+      # grep -z reads the NUL-separated file itself: `tr | grep -q` could lose a match under pipefail
+      # (grep quits at it, and tr, with a large environment left to write, dies of SIGPIPE).
       pid=$$
-      while [ "$pid" -gt 1 ] && tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qxF "$v=${!v}"; do
+      while [ "$pid" -gt 1 ] && grep -qzxF "$v=${!v}" "/proc/$pid/environ" 2>/dev/null; do
         pid=$(proc_ppid "$pid") || return 1
       done ;;
   esac

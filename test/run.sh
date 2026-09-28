@@ -260,6 +260,12 @@ t_unit_agent_session() {
   check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
   out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
   check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # ...with 1.5 MB of environment after its variable too (a `tr | grep -q` pipe lost the match there).
+  local big=() pad i; printf -v pad '%01000d' 0
+  for i in $(seq 1500); do big+=("V$i=$pad"); done
+  out=$(bash -c 'echo "me=$$"; env -i PATH="$PATH" HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" CODEX_THREAD_ID="$0" "${@:2}" \
+    bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib" "${big[@]}")
+  check_eq "...with a large environment too" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
   check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   # A guard exec inside a guarded agent keeps its session, so its agent too (the box is the outer
