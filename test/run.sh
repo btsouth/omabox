@@ -996,11 +996,19 @@ t_guard() {
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
-  # render_unfocused (finding 90): a shot while its window is hidden; the stand-in's workspace and
-  # focused window stay as they were
+  # render_unfocused (finding 90): shots while its window is hidden; the stand-in's workspace and
+  # focused window stay as they were. The first shot right after `up` gets a frame even from a box
+  # that is not drawn while hidden, so a window opened in the box must show in a second one.
   local aw0; aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
   check "...shot while its window is hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden-inner.png
-  check "...a PNG with something in it" "${in[@]}" test -s /tmp/hidden-inner.png
+  local app=foot; command -v es2gears_wayland >/dev/null && app=es2gears_wayland
+  "${in[@]}" "$CLI" run -b inner -d -- "$app" >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through until_ok
+  mapped() { "${in[@]}" "$CLI" hyprctl -b inner -j clients | jq -e 'length > 0' >/dev/null; }
+  check "...a window opens in it" until_ok 10 mapped
+  check "...shot again, still hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden-inner2.png
+  check "...which shows that window: the box is drawn while hidden" \
+    "${in[@]}" sh -c '! cmp -s /tmp/hidden-inner.png /tmp/hidden-inner2.png && test -s /tmp/hidden-inner2.png'
   check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
   check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
@@ -1011,7 +1019,6 @@ t_guard() {
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
   local b; for b in ws3 wsp; do
     check "...shot of $b while hidden" "${in[@]}" "$CLI" shot -b "$b" -o "/tmp/hidden-$b.png"
-    check "...a PNG with something in it" "${in[@]}" test -s "/tmp/hidden-$b.png"
   done
   check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
   check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"

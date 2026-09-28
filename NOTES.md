@@ -1106,9 +1106,11 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
-    workspaces 9 and 3 and the scratchpad (non-empty PNGs, the stand-in's workspace and focused
-    window unchanged), and `t_unit_cli` checks the message for a box without `drawn_hidden`. Not
-    yet checked on the real desktop.
+    workspaces 9 and 3 and the scratchpad, and the one on 9 again once a window has opened in it,
+    which that second shot must show (the first shot right after `up` gets a frame even from a box
+    that is not drawn while hidden); the stand-in's workspace and focused window stay unchanged.
+    `t_unit_cli` checks the message for a box without `drawn_hidden`. Not yet checked on the real
+    desktop.
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
     `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
