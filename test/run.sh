@@ -950,10 +950,23 @@ t_unit_guard_settings() {
 t_unit_guard_exec_host() {
   check_eq "guard exec: the guard's display" omabox-guard "$("$CLI" guard exec -- sh -c 'echo $WAYLAND_DISPLAY')"
   check_eq "guard exec: a core limit of 1 byte (no crash notification)" 1 "$("$CLI" guard exec -- sh -c 'prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "')"
-  # finding 92: no links or files opened on the desktop, however they are asked for.
-  check_match "guard exec: xdg-open refuses" "omabox guard: not opening https://example.com" \
-    "$("$CLI" guard exec -- xdg-open https://example.com 2>&1)"
-  check_fails "...with a failure" "$CLI" guard exec -- xdg-open https://example.com
+  # finding 92: no links or files opened on the desktop, however they are asked for. xdg-open runs
+  # only when `command -v` under guard exec gives the guard's: were a dir with the real one put ahead
+  # of it, xdg-open would open a tab on the desktop. A stub right after the guard's on PATH is a
+  # second net, should the lookup that runs xdg-open ever differ from `command -v`'s: the checks
+  # then reach the stub and fail.
+  local gx=(env PATH="$TMP/fakeopen:$PATH" "$CLI" guard exec --) xo
+  mkdir -p "$TMP/fakeopen"
+  printf '#!/bin/sh\necho "real xdg-open reached"\n' > "$TMP/fakeopen/xdg-open"; chmod +x "$TMP/fakeopen/xdg-open"
+  xo=$("${gx[@]}" sh -c 'command -v xdg-open')
+  check_eq "guard exec: xdg-open is the guard's" "$ROOT/share/guard/xdg-open" "$xo"
+  if [ "$xo" = "$ROOT/share/guard/xdg-open" ]; then
+    check_match "...which refuses" "omabox guard: not opening https://example.invalid" \
+      "$("${gx[@]}" xdg-open https://example.invalid 2>&1)"
+    check_eq "...with exit 4, as xdg-open for a failed action" 4 "$("${gx[@]}" xdg-open https://example.invalid >/dev/null 2>&1; echo $?)"
+  else
+    no "...which refuses, with exit 4" "not run: xdg-open under guard exec is [$xo], not the guard's"
+  fi
   check_eq "...and BROWSER, GH_BROWSER name it" "$ROOT/share/guard/xdg-open $ROOT/share/guard/xdg-open" \
     "$("$CLI" guard exec -- sh -c 'echo $BROWSER $GH_BROWSER')"
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
