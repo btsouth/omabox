@@ -1673,10 +1673,11 @@ cmd_host() {
   unset QT_FORCE_STDERR_LOGGING
   # The guard's browser stand-in (finding 92, any checkout's) gives way to the user manager's value, or
   # none. A BROWSER the guard did not set stays: Omarchy sets it in the shell, not the user manager.
+  # systemctl prints a value with spaces or shell characters quoted, as $'...': not taken as it is.
   for v in BROWSER GH_BROWSER; do
     case ${!v:-} in */share/guard/xdg-open) ;; *) continue ;; esac
     val=$(sed -n "s/^$v=//p" <<<"$sysenv")
-    case $val in ""|*/share/guard/xdg-open) unset "$v" ;; *) export "$v=$val" ;; esac
+    case $val in ""|*/share/guard/xdg-open|\$\'*) unset "$v" ;; *) export "$v=$val" ;; esac
   done
   ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
   say "on your real desktop: $*"

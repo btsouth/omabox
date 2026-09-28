@@ -1011,6 +1011,17 @@ t_unit_guard_exec_host() {
     "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
   check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
     "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
+  # The user manager's, through a stand-in systemctl: a plain value is taken, one it quotes is not.
+  mkdir -p "$TMP/sysenv"
+  cat > "$TMP/sysenv/systemctl" <<'EOF'
+#!/bin/sh
+[ "$*" = "--user show-environment" ] || exit 1
+echo "BROWSER=\$'/opt/my browser'"
+echo GH_BROWSER=firefox
+EOF
+  chmod +x "$TMP/sysenv/systemctl"
+  check_eq "host: the stand-in gives way to the user manager's GH_BROWSER, not to a quoted BROWSER" "unset firefox" \
+    "$("${GUARDED[@]}" PATH="$TMP/sysenv:$ROOT/share/guard:$PATH" "$CLI" host -- sh -c 'echo "${BROWSER-unset} ${GH_BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
