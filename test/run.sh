@@ -1007,6 +1007,8 @@ t_unit_guard_exec_host() {
   check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
   check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
+  check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
+    "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
   check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
     "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"

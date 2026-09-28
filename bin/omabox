@@ -262,10 +262,10 @@ caller_env() {
 }
 
 # The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
-# Any checkout's: a hook written from another clone or worktree names its own.
+# Any checkout's: a hook written from another clone or worktree names its own. A PATH entry may end in /.
 caller_path() {
   local d out=() dirs; IFS=: read -ra dirs <<<"${PATH:-}"
-  for d in "${dirs[@]}"; do case $d in */share/guard) ;; *) out+=("$d") ;; esac; done
+  for d in "${dirs[@]}"; do case $d in */share/guard|*/share/guard/) ;; *) out+=("$d") ;; esac; done
   local IFS=:; printf '%s' "${out[*]}"
 }
 
