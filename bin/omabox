@@ -844,9 +844,10 @@ cmd_up() {
   fi
   # Every box has its own network namespace (finding 89): in the host's, labwc's lazy Xwayland could
   # claim the host's abstract X11 :0 socket and host X11 apps would open in the box. The default mode
-  # keeps the internet, the LAN and host localhost (ports bound on either side are forwarded); an
-  # isolated box has only a loopback and the --allow ports. pasta maps us to root, bwrap maps back to
-  # our uid. pasta closes inherited fds: bwrap's info fd is opened inside it.
+  # keeps the internet, the LAN and the host's loopback (ports bound on either side are forwarded,
+  # within about a second); an isolated box has only a loopback and the --allow ports. pasta maps us
+  # to root, bwrap maps back to our uid. pasta closes inherited fds: bwrap's info fd is opened inside
+  # it, and omabox-wlfd connects from inside (a unix socket).
   if [ "$net" = none ]; then
     # A nested connected box: its pasta would need /dev/net/tun, which the outer box's /dev lacks.
     # It fails closed: a network namespace of its own with only a loopback. (A nested isolated box
@@ -890,8 +891,9 @@ cmd_up() {
   # Without pasta, no --die-with-parent: bwrap's parent is then this command, which the box outlives;
   # `omabox down` (or closing an interactive box's window) ends it.
   # env -i keeps Hyprland's exec-rule token (finding 45): the host matches a new window to its exec
-  # rule by the launched pid or by this token in the client's environment, and pasta forks, so an
-  # isolated box's window only lands on its workspace through the token. bwrap drops it inside.
+  # rule by the launched pid or by this token in the client's environment, and pasta forks, so a
+  # top-level box's window (every one is behind pasta, finding 89) only lands on its workspace through
+  # the token. bwrap drops it inside.
   { printf '#!/usr/bin/env bash\nexec'
     # USER/LOGNAME too (finding 49): widgets and scripts name the user from them. SHELL, which login
     # sets on the host (terminals and multiplexers open it), and every locale variable, not only LANG
