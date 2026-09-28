@@ -911,7 +911,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       `special` = `special:scratchpad` (Omarchy binds SUPER+S to it) or `special:NAME`. It goes into
       the host's Lua, so only those shapes pass; a bad value in the file is ignored with a warning.
       `up --interactive --workspace`, `peek --workspace` per window. An interactive box on the
-      scratchpad starts fine while hidden (the host does not render it; `shot` needs it shown).
+      scratchpad starts fine while hidden (the host does not render it; `shot` needs it shown; see
+      finding 90: it is drawn while hidden now).
     - `confirm-close`: closing an interactive box's window asked nothing and ended the box. With it
       on, the box's Hyprland (hyprland.lua, `monitor.removed` with no monitor left) runs
       `share/confirm-close.sh`: `hyprctl output create wayland` opens a new window (it lands on the
@@ -1092,25 +1093,30 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     workspace = "9" }))'` before every click and shot, then focus back to workspace 1, dozens of
     times. The exec rule now adds `render_unfocused = true`: the host sends the hidden window frame
     callbacks (at `misc.render_unfocused_fps`, 15 by default), the box's Hyprland keeps drawing, and
-    `shot`, `click` and `keys` all work with the window out of sight. Hyprland applies the rule
-    whenever it re-checks the window's rules (on focus, a move to another workspace, a config
-    reload), and that re-check overwrites what `set_prop` set on its own: `set_prop` on an existing
-    window reports true (getprop says so) but the window stays undrawn. A box started before this
-    probably starts drawing after its first re-check; to be sure it needs a restart, which ends
-    the user's session in it, so `shot`'s message for such a box says to ask the user rather than
-    to restart it. `up` records `drawn_hidden` in box.json to tell those apart; neither message
-    suggests showing the window, both say not to. The skill says the same under `omabox host`, and
-    that a box the user started is named after the repo (finding 88): an agent passes `-b NAME` to
-    reach it. The cost: a hidden interactive box running something animated now keeps drawing at
-    15 fps where it used to stop, and interactive boxes never idle out.
+    `shot`, `click` and `keys` all work with the window out of sight. Hyprland keeps the exec
+    rule's `render_unfocused` with the window through every rule re-check (focus, a move to another
+    workspace, a reload). The renderer only starts drawing a hidden window when rules are
+    (re)applied (`window.updateRules`: at map and on each re-check), so `set_prop` on an existing
+    window reports true (getprop says so) but does nothing until the next re-check, and a re-check
+    never overwrites it. A box started before this has an exec rule without `render_unfocused`, so
+    no re-check makes it draw: it needs a restart, or `set_prop` followed by a re-check (a dispatch
+    on the user's session). Hyprland 0.56.2's source says so, and es2gears in a box agreed: 0 fps
+    after `set_prop` alone, 15 after a tag toggle; an old-style rule stayed at 0 through a tag
+    toggle, a workspace move and a reload. A restart ends the user's session in the box, so
+    `shot`'s message for such a box says to ask the user rather than to restart it. `up` records
+    `drawn_hidden` in box.json to tell those apart; neither message suggests showing the window,
+    both say not to. The skill says the same under `omabox host`, and that a box the user started
+    is named after the repo (finding 88): an agent passes `-b NAME` to reach it. The cost: a hidden
+    interactive box running something animated now keeps drawing at 15 fps where it used to stop,
+    and interactive boxes never idle out.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
     workspaces 9 and 3 and the scratchpad, and the one on 9 again once a window has opened in it,
     which that second shot must show (the first shot right after `up` gets a frame even from a box
     that is not drawn while hidden); the stand-in's workspace and focused window stay unchanged.
-    `t_unit_cli` checks the message for a box without `drawn_hidden`. Not yet checked on the real
-    desktop.
+    `t_unit_shot_hidden` checks the messages, for a box with and without `drawn_hidden`. Not yet
+    checked on the real desktop.
 91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
     user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
     `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
