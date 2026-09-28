@@ -121,6 +121,13 @@ t_unit_refusals() {
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
+  # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
+  check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
+    "$(unshare -Urm bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
+  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later)
+  check_match "a box behind pasta is refused up front from a no_new_privs process" \
+    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" 2>&1)"
+  check_fails "...before its box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r20"
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -474,12 +481,16 @@ new_x11() {
 # servers, on any port. Read-only on the host: no X client, and ports nobody listens on; from the box,
 # one connection to its gateway (the router).
 t_connected() {
-  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out ns port tok hport htok gw got
+  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out rc ns port tok hport htok gw got
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
   # (No box, nothing to check; and no stray dir from writing into its HOME.)
   if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
   else no "up (--net host: connected's old name)" "$out"; return; fi
   check_match "ls shows it connected" "$B +headless .* up +connected " "$(ob ls)"
+  # A no_new_privs process (a sandboxed agent's) cannot start a box behind pasta, but can use this one.
+  rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" 2>&1) || rc=$?
+  check_match "up from a no_new_privs process finds it already up" "box '$B' is already up" "$out"
+  check_eq "...and succeeds" 0 "$rc"
   # -D none: with --no-map-gw pasta cannot hand the box a loopback nameserver (the host's 127.0.0.53),
   # and would say so on every start.
   check_eq "pasta printed no warning (box.log is empty)" "" "$(cat "$D/box.log" 2>&1)"
