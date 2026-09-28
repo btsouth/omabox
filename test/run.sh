@@ -279,6 +279,15 @@ t_unit_agent_session() {
   kill "$other" 2>/dev/null
   check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
     env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
+  # An agent that exited is gone even while it is a zombie: its parent (an exec'd sleep) never waits.
+  local zd=$TMP/zombie z; mkdir -p "$zd"
+  bash -c 'sleep 300 & echo $! > "$0"; exec sleep 300' "$zd/pid" & local zparent=$!
+  until_ok 5 test -s "$zd/pid"; z=$(cat "$zd/pid")
+  jq -n --argjson a "$z" --arg s "$(bash -c 'source "$1"; proc_start "$2"' _ "$lib" "$z")" '{agent: $a, agent_start: $s}' > "$zd/box.json"
+  check "an agent that runs is alive" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$z"; until_ok 5 grep -q '^[^)]*) Z' "/proc/$z/stat"
+  check_fails "...one that exited is not, though its parent has not reaped it" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$zparent" 2>/dev/null
 }
 
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the

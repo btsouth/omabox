@@ -1095,33 +1095,34 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
 93. **A session's box goes when its agent does** (2026-09-27, the follow-up finding 88 left). `up`
     records the agent's process for a session's default box, as pid and start time in box.json, and
     the reaper takes the box down once that pid no longer has that start time (a reused pid is not
-    the agent). The agent: Claude Code exports its own pid as `CLAUDE_PID` to every command;
-    `guard exec` exports `OMABOX_AGENT_PID`, the pid it execs the agent as; Codex sets
-    `CODEX_THREAD_ID` for its children only, so it is the nearest ancestor whose /proc/PID/environ
-    lacks `VAR=value` (compared by value: a `codex` started from another session's shell carries the
-    outer id). It reads each environ with `grep -qz`: through `tr | grep -q` under pipefail, grep
-    quitting at the match left `tr` to die of SIGPIPE when much of the environment followed (~1.5
-    MB: every time, in review), which read as no match, and the walk stopped at `omabox` itself. The
-    pid must be one `up` descends from. A first version walked /proc for every agent and, for
-    `OMABOX_SESSION`, took the farthest ancestor with it, assuming `guard exec` exported it: set by
-    hand for one command (`OMABOX_SESSION=x omabox up`), that recorded `omabox up` itself, and the
-    reaper took the box down about a minute later. Now `OMABOX_SESSION` without `guard exec` names
-    no agent, and such a box only idles out. A `guard exec` inside a guarded agent keeps its
-    session, so it shares the outer agent's box, but it exported its own pid: a box the inner agent
-    started went when that one exited, under the outer one (found in review). It now keeps an
-    `OMABOX_AGENT_PID` it runs under along with the session, and only then (a new session, or a pid
-    it does not run under, gets its own). A box in use when its agent goes (a peek window, an
-    `omabox run` still running) is not taken down: the agent check comes after the activity check,
-    and the box idles out once nobody uses it. A box found dead keeps its logs until `down`, like
-    any other dead box (findings 71, 74). With the agent tracked, a session's box has the 2 h idle
-    limit again (finding 88 had cut it to 30 min meanwhile). An agent in a pid namespace of its own
-    (a sandbox) is not found; its box only idles out. Interactive boxes and names given with
-    `-b`/`OMABOX` are never tied to an agent. The reaper polls every idle/4 capped at 60 s, so a box
-    can outlive its agent by up to a minute. `t_unit_agent_session` checks each way of finding the
-    agent and the one-command case; `t_agent_session` runs fake Claude Code sessions (a shell
-    exporting its own pid as `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an
-    `omabox run` is going after the agent is killed, goes once that ends, and a box that died stays
-    dead.
+    the agent) or is a zombie (an agent that exited under a parent that never waits kept its start
+    time, and its box, until that parent went; found in review). The agent: Claude Code exports its
+    own pid as `CLAUDE_PID` to every command; `guard exec` exports `OMABOX_AGENT_PID`, the pid it
+    execs the agent as; Codex sets `CODEX_THREAD_ID` for its children only, so it is the nearest
+    ancestor whose /proc/PID/environ lacks `VAR=value` (compared by value: a `codex` started from
+    another session's shell carries the outer id). It reads each environ with `grep -qz`: through
+    `tr | grep -q` under pipefail, grep quitting at the match left `tr` to die of SIGPIPE when much
+    of the environment followed (~1.5 MB: every time, in review), which read as no match, and the
+    walk stopped at `omabox` itself. The pid must be one `up` descends from. A first version walked
+    /proc for every agent and, for `OMABOX_SESSION`, took the farthest ancestor with it, assuming
+    `guard exec` exported it: set by hand for one command (`OMABOX_SESSION=x omabox up`), that
+    recorded `omabox up` itself, and the reaper took the box down about a minute later. Now
+    `OMABOX_SESSION` without `guard exec` names no agent, and such a box only idles out. A
+    `guard exec` inside a guarded agent keeps its session, so it shares the outer agent's box, but
+    it exported its own pid: a box the inner agent started went when that one exited, under the
+    outer one (found in review). It now keeps an `OMABOX_AGENT_PID` it runs under along with the
+    session, and only then (a new session, or a pid it does not run under, gets its own). A box in
+    use when its agent goes (a peek window, an `omabox run` still running) is not taken down: the
+    agent check comes after the activity check, and the box idles out once nobody uses it. A box
+    found dead keeps its logs until `down`, like any other dead box (findings 71, 74). With the
+    agent tracked, a session's box has the 2 h idle limit again (finding 88 had cut it to 30 min
+    meanwhile). An agent in a pid namespace of its own (a sandbox) is not found; its box only idles
+    out. Interactive boxes and names given with `-b`/`OMABOX` are never tied to an agent. The reaper
+    polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute.
+    `t_unit_agent_session` checks each way of finding the agent and the one-command case;
+    `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
+    `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an `omabox run` is going after
+    the agent is killed, goes once that ends, and a box that died stays dead.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

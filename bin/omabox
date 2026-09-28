@@ -1024,8 +1024,12 @@ cmd__reap() {
   done
 }
 
-# Whether the agent `up` recorded for this box still runs: its pid, started when it was then.
-agent_alive() { [ "$(proc_start "$(meta agent)")" = "$(meta agent_start)" ]; }
+# Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and not
+# a zombie (exited, but not reaped yet: a parent that never waits would keep it so for good).
+agent_alive() {
+  local pid; pid=$(meta agent)
+  [ "$(proc_stat "$pid" 0)" != Z ] && [ "$(proc_start "$pid")" = "$(meta agent_start)" ]
+}
 
 # Write VALUE to a file in a box's runtime dir (<box dir>/run/FILE). The box can write that dir too, so
 # never open what is there: a link to a host file would be written through, a FIFO would block
