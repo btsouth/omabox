@@ -288,6 +288,21 @@ t_unit_agent_session() {
   kill "$z"; until_ok 5 grep -q '^[^)]*) Z' "/proc/$z/stat"
   check_fails "...one that exited is not, though its parent has not reaped it" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
   kill "$zparent" 2>/dev/null
+  # None recorded, or no start time, is none alive. An empty pid read /proc//stat (the system-wide
+  # /proc/stat: no state Z) and an empty start matched the empty one read for it, or for a pid gone.
+  # In a condition, as its callers call it (set -e would end it at a failed read otherwise).
+  # shellcheck disable=SC2329 # called through check_fails
+  alive() { env D="$zd" bash -c 'source "$1"; agent_alive || exit 1' _ "$lib"; }
+  local nopid=$(($(cat /proc/sys/kernel/pid_max) + 1))
+  echo '{"agent": null}' > "$zd/box.json"
+  check_fails "a box that records no agent has none alive" alive
+  rm -f "$zd/box.json"
+  check_fails "...nor one with no box.json" alive
+  jq -n --argjson a "$nopid" '{agent: $a, agent_start: ""}' > "$zd/box.json"
+  check_fails "...nor one that records a pid gone, with no start time" alive
+  check_fails "proc_stat takes no empty pid" bash -c 'source "$1"; proc_stat "" 0' _ "$lib"
+  check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
+    env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
 }
 
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the

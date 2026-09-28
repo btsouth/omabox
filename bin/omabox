@@ -193,7 +193,9 @@ agent_proc() {
       done ;;
   esac
   [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ -r "/proc/$pid/environ" ] && descends_from "$pid" || return 1
-  echo "$pid $(proc_start "$pid")"
+  # Gone meanwhile: no start time to record (with none, agent_alive would never find it gone).
+  local start; start=$(proc_start "$pid") && [ -n "$start" ] || return 1
+  echo "$pid $start"
 }
 # Whether this process is PID or runs under it.
 descends_from() {
@@ -203,8 +205,12 @@ descends_from() {
     p=$(proc_ppid "$p") || return 1
   done
 }
-# Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses).
-proc_stat() { local s f; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; read -ra f <<<"${s##*) }"; echo "${f[$2]}"; }
+# Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses). A pid only:
+# an empty one would read /proc//stat, which is the system-wide /proc/stat.
+proc_stat() {
+  local s f; [[ $1 =~ ^[0-9]+$ ]] && s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  read -ra f <<<"${s##*) }"; echo "${f[$2]}"
+}
 proc_ppid() { proc_stat "$1" 1; }
 proc_start() { proc_stat "$1" 19; }
 
@@ -1025,10 +1031,12 @@ cmd__reap() {
 }
 
 # Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and not
-# a zombie (exited, but not reaped yet: a parent that never waits would keep it so for good).
+# a zombie (exited, but not reaped yet: a parent that never waits would keep it so for good). None
+# recorded, or no start time, is none alive.
 agent_alive() {
-  local pid; pid=$(meta agent)
-  [ "$(proc_stat "$pid" 0)" != Z ] && [ "$(proc_start "$pid")" = "$(meta agent_start)" ]
+  local pid start; pid=$(meta agent) && start=$(meta agent_start) || return 1
+  [ -n "$pid" ] && [ -n "$start" ] || return 1
+  [ "$(proc_stat "$pid" 0)" != Z ] && [ "$(proc_start "$pid")" = "$start" ]
 }
 
 # Write VALUE to a file in a box's runtime dir (<box dir>/run/FILE). The box can write that dir too, so
