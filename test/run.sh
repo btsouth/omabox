@@ -312,22 +312,33 @@ t_agent_session() {
   local repo; repo=$(tmp_repo ag)
   local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
   local s3=11111111-2222-4333-8444-5555aaaa0003 s4=11111111-2222-4333-8444-5555aaaa0004
+  local s5=11111111-2222-4333-8444-5555aaaa0005 s6=11111111-2222-4333-8444-5555aaaa0006
   as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
-  # Run in the background: exec makes that process the agent, so $! is its pid.
+  # Run in the background: exec makes that process the agent, so $! is its pid. Its first command is
+  # `up --no-shell` with the options given, or the one after -- (agent S -- run -- true); then it
+  # touches $TMP/ag-PID (its output in $TMP/ag-PID.out) and waits.
   agent() {
+    local s=$1; shift
+    if [ "${1:-}" = -- ]; then shift; else set -- up --no-shell "$@"; fi
     cd "$repo" || exit 1
-    exec env -u OMABOX -u OMABOX_IDLE bash -c "export CLAUDE_CODE_SESSION_ID=$1 CLAUDE_PID=\$\$
-      '$CLI' up --no-shell ${2:-} >/dev/null 2>&1; touch '$TMP/ag-$1'; exec sleep 300" >/dev/null 2>&1
+    exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" bash -c 'export CLAUDE_PID=$$
+      "${@:2}" >"$1-$$.out" 2>&1; touch "$1-$$"; exec sleep 300' _ "$TMP/ag" "$CLI" "$@" >/dev/null 2>&1
   }
   idle_of() { jq -r .idle "$XDG_RUNTIME_DIR/omabox/$1/box.json"; }
+  agent_of() { jq -r .agent "$XDG_RUNTIME_DIR/omabox/$1/box.json" 2>/dev/null; }
   state_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
+  # shellcheck disable=SC2329 # called through until_ok
+  gone() { [ "$(state_of "$1")" = gone ]; }
   local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
+  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006
+  local s8=11111111-2222-4333-8444-5555aaaa0008 b8=$P-ag-aaaa0008 s9=11111111-2222-4333-8444-5555aaaa0009
+  local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
   agent $s1 & local a1=$!
-  agent $s2 "--idle 45m" & local a2=$!
-  check "both sessions' boxes start" until_ok 40 test -e "$TMP/ag-$s1" -a -e "$TMP/ag-$s2"
+  agent $s2 --idle 45m & local a2=$!
+  check "both sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2"
   check_eq "session 1 has its box" up "$(state_of "$b1")"
   check_eq "session 2 has its own" up "$(state_of "$b2")"
-  check_eq "the box knows its agent" "$a1" "$(jq -r .agent "$XDG_RUNTIME_DIR/omabox/$b1/box.json")"
+  check_eq "the box knows its agent" "$a1" "$(agent_of "$b1")"
   check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
   check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
@@ -337,11 +348,13 @@ t_agent_session() {
   check_eq "a box named with -b is not tied to the agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$named/box.json")"
   (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" up --no-shell --idle 30s >/dev/null 2>&1)
   check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" guard exec -- "$CLI" run -- true >/dev/null 2>&1)
+  check_eq "...nor does an agent of that session take it over" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
   ob down "$named" "$P-ag-abcd1234" "$b1" >/dev/null 2>&1; kill "$a1" "$a2" 2>/dev/null
   # Short idle limits, so the reaper polls every few seconds.
-  agent $s3 "--idle 30s" & local a3=$!
-  agent $s4 "--idle 30s" & local a4=$!
-  until_ok 40 test -e "$TMP/ag-$s3" -a -e "$TMP/ag-$s4"
+  agent $s3 --idle 30s & local a3=$!
+  agent $s4 --idle 30s & local a4=$!
+  until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
   ob run -b "$b3" -- sleep 15 & local busy=$!
   sleep 1; kill "$a3" 2>/dev/null
   local pid4; pid4=$(bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$b4")
@@ -350,11 +363,137 @@ t_agent_session() {
   check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
   check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
   wait "$busy" 2>/dev/null
-  # shellcheck disable=SC2329 # called through until_ok
-  gone() { [ "$(state_of "$1")" = gone ]; }
   check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
   ob down "$b3" "$b4" >/dev/null 2>&1
-  kill "$a1" "$a2" "$a3" "$a4" 2>/dev/null
+  # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
+  # its box over once the agent it records is gone, whether its first command is `run`, `up`, one
+  # through need_box (`hyprctl`) or `path`; another session's command that names the box does not.
+  # The reapers are stopped meanwhile, so that no check falls between the old agent's exit and that
+  # command.
+  agent $s5 --idle 20s & local a5=$!
+  agent $s6 --idle 20s & local a6=$!
+  agent $s8 --idle 20s & local a8=$!
+  until_ok 40 test -e "$TMP/ag-$a5" -a -e "$TMP/ag-$a6" -a -e "$TMP/ag-$a8"
+  agent $s5 -- run -- true & local c5=$!
+  until_ok 20 test -e "$TMP/ag-$c5"
+  check_eq "a second agent of a session leaves its box to the first while that runs" "$a5" "$(agent_of "$b5")"
+  kill "$c5" 2>/dev/null
+  local reapers; mapfile -t reapers < <(pgrep -f "omabox _reap ($b5|$b6|$b8) ")
+  kill -STOP "${reapers[@]}"
+  kill "$a5" "$a6" "$a8" 2>/dev/null; wait "$a5" "$a6" "$a8" 2>/dev/null
+  agent $s5 -- run -- true & local r5=$!
+  agent $s6 & local r6=$!
+  agent $s9 -- hyprctl -b "$b8" -j version & local o8=$!
+  until_ok 20 test -e "$TMP/ag-$o8"
+  check_eq "another session's command naming the box (-b) does not take it over" "$a8" "$(agent_of "$b8")"
+  kill "$o8" 2>/dev/null; wait "$o8" 2>/dev/null   # (had it, the next checks still see their own part)
+  agent $s8 -- hyprctl -j version & local r8=$!
+  until_ok 20 test -e "$TMP/ag-$r8"
+  check_eq "a resumed session's first hyprctl takes its box over (need_box)" "$r8" "$(agent_of "$b8")"
+  kill "$r8" 2>/dev/null; wait "$r8" 2>/dev/null
+  agent $s8 -- path & local q8=$!
+  until_ok 20 test -e "$TMP/ag-$q8" -a -e "$TMP/ag-$r5" -a -e "$TMP/ag-$r6"
+  check_eq "...and so does its first path" "$q8" "$(agent_of "$b8")"
+  kill -CONT "${reapers[@]}"
+  sleep 11   # two checks
+  check_eq "a resumed session's first run takes its box over" "up $r5" "$(state_of "$b5") $(agent_of "$b5")"
+  check_eq "...and so does its first up" "up $r6" "$(state_of "$b6") $(agent_of "$b6")"
+  ob path "$b5" >/dev/null; ob path "$b6" >/dev/null   # idle clocks back to 0: what takes them down now is the agent
+  kill "$r5" "$r6" 2>/dev/null
+  check "...and the box goes with the new agent" until_ok 10 gone "$b5"
+  check "...(the one it took over with up too)" until_ok 10 gone "$b6"
+  ob down "$b5" "$b6" "$b8" >/dev/null 2>&1
+  # The reaper decided to take a box down for an agent that exited, and its `down` waits for the
+  # box's lock, which the session's new agent took first to take the box over: the down checks the
+  # agent again under the lock and leaves the box, and the reaper then watches the new agent. The
+  # order is fixed by hand: the lock is held while both queue, and the reaper's flock is stopped
+  # until the new agent's command is done.
+  local lk=$XDG_RUNTIME_DIR/omabox/.lock-$b10 reaper held rf
+  # shellcheck disable=SC2329 # called through until_ok
+  flock_of() { pgrep -x flock -P "$(pgrep -d, -P "$1")"; }   # the flock an agent's command waits in
+  agent $s10 --idle 20s & local a10=$!
+  until_ok 40 test -e "$TMP/ag-$a10"
+  reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
+  agent $s10 -- run -- true & local r10=$!
+  until_ok 10 flock_of "$r10"                      # its take_over waits for the lock
+  until_ok 15 pgrep -x flock -P "$reaper"          # the reaper said "taking it down"; its down waits
+  rf=$(pgrep -x flock -P "$reaper")
+  [ -z "$rf" ] || kill -STOP "$rf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 20 test -e "$TMP/ag-$r10"
+  [ -z "$rf" ] || kill -CONT "$rf"
+  check "a takeover made while the reaper's down waited for the lock keeps the box" \
+    until_ok 10 grep -q ": kept$" "$XDG_RUNTIME_DIR/omabox/$b10/reap.log"
+  check_eq "...for the new agent" "up $r10" "$(state_of "$b10") $(agent_of "$b10")"
+  # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
+  # command that waited says no box is up (`run -d` wrote its log into the box's dir, gone by then).
+  rm -f "$TMP/held" "$TMP/release"
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
+  agent $s10 -- run -d -- true & local d10=$!
+  until_ok 10 flock_of "$d10"
+  until_ok 15 pgrep -x flock -P "$reaper"          # the same reaper, now for r10's exit
+  local df; df=$(flock_of "$d10")
+  [ -z "$df" ] || kill -STOP "$df"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
+  [ -z "$df" ] || kill -CONT "$df"
+  until_ok 20 test -e "$TMP/ag-$d10"
+  check_match "a first command that waited for the lock while the box went says no box is up" \
+    "no box '$b10' is up" "$(cat "$TMP/ag-$d10.out" 2>/dev/null)"
+  ob down "$b10" >/dev/null 2>&1
+  # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
+  # reaper's down and before the new agent's command: that command must not take over the new box,
+  # which records no agent. The up's flock and the command's are stopped until their turn.
+  local s11=11111111-2222-4333-8444-5555aaaa0011 b11=$P-ag-aaaa0011 uf tf
+  agent $s11 --idle 20s & local a11=$!
+  until_ok 40 test -e "$TMP/ag-$a11"
+  reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
+  rm -f "$TMP/held" "$TMP/release"
+  lk=$XDG_RUNTIME_DIR/omabox/.lock-$b11
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a11" 2>/dev/null; wait "$a11" 2>/dev/null
+  agent $s11 -- run -- true & local r11=$!
+  (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID=$s11 "$CLI" up --no-shell \
+    --idle 20s) >/dev/null 2>&1 & local u11=$!
+  until_ok 10 flock_of "$r11"
+  until_ok 10 pgrep -x flock -P "$u11"
+  until_ok 15 pgrep -x flock -P "$reaper"
+  tf=$(flock_of "$r11"); uf=$(pgrep -x flock -P "$u11")
+  [ -z "$tf" ] || kill -STOP "$tf"
+  [ -z "$uf" ] || kill -STOP "$uf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 15 gone "$b11"                          # the reaper's down
+  [ -z "$uf" ] || kill -CONT "$uf"
+  wait "$u11" 2>/dev/null
+  [ -z "$tf" ] || kill -CONT "$tf"
+  until_ok 20 test -e "$TMP/ag-$r11"
+  check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
+    "up null" "$(state_of "$b11") $(agent_of "$b11")"
+  ob down "$b11" >/dev/null 2>&1
+  kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
+}
+
+# `mode` writes box.json's size under the box's lock, as a takeover writes its agent (finding 93): a
+# mode change made meanwhile would otherwise put back the agent that exited. The lock is held here.
+t_mode_lock() {
+  local B=$P-ml m rc=0 held lk=$XDG_RUNTIME_DIR/omabox/.lock-$P-ml
+  check "a box for mode" ob up "$B" --no-shell --idle 5m
+  local before; before=$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
+  until_ok 5 test -e "$TMP/ml-held"
+  "$CLI" mode -b "$B" 1280x720 > "$TMP/ml-out" 2>&1 & m=$!
+  check "mode waits for the box's lock to record the new size" until_ok 10 pgrep -x flock -P "$m"
+  check_eq "...box.json keeps the old one meanwhile" "$before" "$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  touch "$TMP/ml-release"; wait "$held" 2>/dev/null
+  wait "$m" || rc=$?
+  check_eq "...and records it once it has the lock" "0 1280x720@60" "$rc $(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  ob down "$B" >/dev/null 2>&1
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
@@ -1102,7 +1241,7 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_main t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

@@ -1122,10 +1122,36 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     to 30 min meanwhile). An agent in a pid namespace of its own (a sandbox) is not found; its box
     only idles out. Interactive boxes and names given with `-b`/`OMABOX` are never tied to an agent.
     The reaper polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute.
+    A session resumed in a new process (`claude --continue` or `--resume`, which keep the id) found
+    its box still up but recording the agent that had exited, and the reaper took it down under the
+    new one at its next check (11 s after the first quit, in review). Now a command that reaches a
+    session's box that is up (`up`, `run`, `path` and every one through `need_box`) records its own
+    agent there when the one recorded is gone; only then, not in a box that records none or whose
+    agent still runs. The write holds the box's lock, and the reaper's `down`, which decided on the
+    old agent, checks it again under that lock, so a takeover made while it waited keeps the box.
+    The takeover too checks again under that lock that the box records an agent and that it is gone:
+    an `up` of the name that found no agent may have come in between that `down` and it, and the box
+    that `up` started is not taken over (found in review). An agent whose first command comes after
+    that check finds the box gone, and so does one whose command waited for the lock while that
+    `down` had it: `run`, `path` and every command through `need_box` say no box is up (`run -d`
+    went on and failed with a bash error, its log's dir gone; found in review), and `up` starts a
+    new box, as it would for one that had died a moment earlier. `mode` writes box.json's size under
+    the box's lock too: its read and write around a takeover would put back the agent that exited
+    (found in review; `t_mode_lock` holds the lock and checks that `mode` waits for it).
     `t_unit_agent_session` checks each way of finding the agent and the one-command case;
     `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
     `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an `omabox run` is going after
-    the agent is killed, goes once that ends, and a box that died stays dead.
+    the agent is killed, goes once that ends, and a box that died stays dead; a new agent of the
+    session whose first command is `run` or `up` keeps the box past two checks and takes it down
+    when it exits, a new agent's first `hyprctl` (through `need_box`) or `path` records it too, and
+    another session's command naming the box with `-b` does not (the reapers stopped across the
+    handover; each fails without its part of the takeover). A takeover made while the reaper's
+    `down` waits for the lock keeps the box, and the reaper then watches the new agent: the lock is
+    held by hand while both queue, and the reaper's `flock` stopped until the new agent's command is
+    done, so the order is fixed (it fails without `down`'s check under the lock, or with a reaper
+    that stops watching after it); with the new command's `flock` stopped instead, that command's
+    `run -d` says no box is up, and with an `up` of the name that finds no agent also let in between
+    the two, the command does not take over the box it started.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
