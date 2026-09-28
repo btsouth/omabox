@@ -1106,9 +1106,9 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     `shot`'s message for such a box says to ask the user rather than to restart it. `up` records
     `drawn_hidden` in box.json to tell those apart; neither message suggests showing the window,
     both say not to. The skill says the same under `omabox host`, and that a box the user started
-    is named after the repo (finding 88): an agent passes `-b NAME` to reach it. The cost: a hidden
-    interactive box running something animated now keeps drawing at 15 fps where it used to stop,
-    and interactive boxes never idle out.
+    has its own name (the repo's, finding 88, or box-N from the bar widget): an agent passes
+    `-b NAME` to reach it. The cost: a hidden interactive box running something animated now keeps
+    drawing at 15 fps where it used to stop, and interactive boxes never idle out.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
