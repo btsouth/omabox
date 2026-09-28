@@ -1119,13 +1119,22 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     it is off (a "no" to turning it on does not hold an update back, and a "no" to an update is not
     remembered). If the checkout a hook names is gone (a removed worktree), its PATH entry quietly
     stops working and `xdg-open` reaches the desktop again: `omabox guard` says so for that agent.
-    Not covered, and no variable reaches them: Python's `webbrowser` tries the next browser when one
-    fails (under the guard its order was the stand-in, `xdg-open`, `gio`, `chromium`); npm's `open`
-    runs the copy of xdg-open it ships; a browser started directly with a URL (Arch's `chromium`
-    launcher takes flags from a file only); and `omarchy-launch-browser` / `omarchy-launch-webapp`,
-    which go through `uwsm-app` and the user manager, as the guard's other gaps do. Per-browser
-    wrappers were considered and left out: a fake `chromium` would break `chromium --headless`,
-    which agents use on purpose, the list of names never ends, and Codex would not get them.
+    Python's `webbrowser` stops at the stand-in: `BROWSER` names an `xdg-open`, so Python runs it
+    in the background as it runs xdg-open and counts it as opened once it has started. Checked in a
+    box with only fake browsers after the guard's PATH entry (Python 3.14.7): 20 of 20 opens
+    returned True and reached none, and as many with Codex's variables (a fake `xdg-open` on PATH
+    instead of the guard's). Only when the stand-in's path has a space (`guard exec` from
+    such a checkout; `guard on` refuses one) does Python wait for it, and its exit 4 then sends
+    Python on to the next browser, the desktop's default first (with a fake `xdg-settings` naming
+    `chromium.desktop`, 3 of 3 reached the fake `chromium`). Not covered, and no variable reaches
+    them: `gio open`, which starts the desktop's URL handler itself (in a box under the guard's
+    variables and PATH, `xdg-open` refused while `gio open` started the `x-scheme-handler/https`
+    entry, exit 0); npm's `open` runs the copy of xdg-open it ships; a browser started directly
+    with a URL (Arch's `chromium` launcher takes flags from a file only); and
+    `omarchy-launch-browser` / `omarchy-launch-webapp`, which go through `uwsm-app` and the user
+    manager, as the guard's other gaps do. Per-browser wrappers were considered and left out: a fake
+    `chromium` would break `chromium --headless`, which agents use on purpose, the list of names
+    never ends, and Codex would not get them.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

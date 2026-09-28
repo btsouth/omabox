@@ -255,9 +255,11 @@ purpose, processes the agent starts itself rather than through its shell (MCP se
 browser MCP opens on your desktop), or anything over the session bus or the user manager (notifications, the keyring, apps
 started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment),
 and links opened by other routes: a browser started directly with a URL (it hands the URL to the one
-already running), Python's `webbrowser` (it falls back to `gio` and `chromium`), npm's `open` (it
-runs its own copy of xdg-open), or, under Codex, a plain `xdg-open` (Codex sets values, so it gets
-`BROWSER` and `GH_BROWSER` but not the PATH entry). It stops accidents. For a fence, run
+already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own copy
+of xdg-open), or, under Codex, a plain `xdg-open` (Codex sets values, so it gets `BROWSER` and
+`GH_BROWSER` but not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts
+one that has started as a success), except under `guard exec` from an omabox at a path with a space:
+there it tries the next browser when that one fails. It stops accidents. For a fence, run
 the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also blocks the network
 and every other socket, omabox's included).
 
